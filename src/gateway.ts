@@ -1,6 +1,6 @@
 import { PermissionEngine, AuditLog } from "./engine";
 import { Tool, FileReadTool, BashTool, FileWriteTool, FileEditTool } from "./tools";
-import { ToolContext, PermissionDecision } from "./types";
+import { ToolContext, PermissionDecision, GatewayExecuteResult } from "./types";
 
 export interface GatewayOptions {
   engine: PermissionEngine;
@@ -24,7 +24,7 @@ export class PermissionGateway {
     };
   }
 
-  async execute(toolName: string, input: any): Promise<{ decision: PermissionDecision; result?: any }> {
+  async execute(toolName: string, input: any): Promise<GatewayExecuteResult> {
     const tool = this.tools[toolName] || (
       toolName.startsWith("mcp__")
         ? {

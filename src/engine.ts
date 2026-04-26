@@ -133,7 +133,7 @@ export class PermissionEngine {
 
     const matchingRules = this.rules.filter(rule => {
       if (!this.toolMatchesRule(rule.tool, toolName)) return false
-      if (rule.pattern && !new RegExp(rule.pattern).test(input)) return false
+      if (rule.pattern && !this.patternMatches(rule.pattern, input)) return false
       return true
     })
 
@@ -170,6 +170,14 @@ export class PermissionEngine {
     }
 
     return { behavior: "ask", reason: "No matching rule found" }
+  }
+
+  private patternMatches(pattern: string, input: string): boolean {
+    try {
+      return new RegExp(pattern).test(input)
+    } catch {
+      return false
+    }
   }
 
   private toolMatchesRule(ruleTool: string, toolName: string): boolean {

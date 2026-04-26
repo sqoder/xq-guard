@@ -127,4 +127,43 @@ describe("xq-guard gateway", () => {
     expect(result.decision.behavior).toBe("deny")
     expect(result.decision.reason).toContain("ReadOnly mode")
   })
+
+  test("blocks edit when file changed after read", async () => {
+    const { cwd, gateway, engine } = setup()
+    writeFileSync(join(cwd, "a.txt"), "old")
+    await engine.saveRule({ tool: "FileRead", behavior: "allow", source: "user" })
+    await engine.saveRule({ tool: "FileEdit", behavior: "allow", source: "user" })
+    await gateway.execute("FileRead", { path: "a.txt" })
+    
+    // 模拟外部修改
+    writeFileSync(join(cwd, "a.txt"), "changed by user")
+    
+    const result = await gateway.execute("FileEdit", {
+      path: "a.txt",
+      oldString: "old",
+      newString: "hack",
+    })
+    expect(result.decision.behavior).toBe("deny")
+    expect(result.decision.reason).toContain("modified since it was last read")
+  })
+
+  test("blocks path traversal outside allowed paths", async () => {
+    const { gateway, engine } = setup()
+    await engine.saveRule({ tool: "FileRead", behavior: "allow", source: "user" })
+    const result = await gateway.execute("FileRead", {
+      path: "../outside.txt",
+    })
+    expect(result.decision.behavior).toBe("deny")
+    expect(result.decision.reason).toContain("escapes allowed paths")
+  })
+
+  test("dangerous bash command is denied even with allow rule in non-interactive mode", async () => {
+    const { gateway, engine } = setup()
+    await engine.saveRule({ tool: "Bash", behavior: "allow", source: "user" })
+    const result = await gateway.execute("Bash", {
+      cmd: "rm -rf /",
+    })
+    expect(result.decision.behavior).toBe("deny")
+    expect(result.decision.reason).toBe("Auto-deny in non-interactive mode")
+  })
 })

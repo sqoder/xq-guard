@@ -10,6 +10,10 @@ import {
 } from "path"
 import { realpathSync, existsSync } from "fs"
 
+function isObjectInput(input: unknown): input is Record<string, unknown> {
+  return typeof input === "object" && input !== null && !Array.isArray(input)
+}
+
 export abstract class Tool {
   abstract name: string
   abstract validate(input: any): { ok: boolean; msg?: string }
@@ -116,7 +120,10 @@ export abstract class Tool {
 
 export class FileReadTool extends Tool {
   name = "FileRead"
-  validate(input: { path: string }) {
+  validate(input: any) {
+    if (!isObjectInput(input)) {
+      return { ok: false, msg: "Input must be an object" }
+    }
     return input.path ? { ok: true } : { ok: false, msg: "Missing path" }
   }
 
@@ -145,7 +152,10 @@ export class FileReadTool extends Tool {
 
 export class BashTool extends Tool {
   name = "Bash"
-  validate(input: { cmd: string }) {
+  validate(input: any) {
+    if (!isObjectInput(input)) {
+      return { ok: false, msg: "Input must be an object" }
+    }
     return input.cmd ? { ok: true } : { ok: false, msg: "Empty command" }
   }
 
@@ -210,7 +220,10 @@ export class BashTool extends Tool {
 
 export class FileWriteTool extends Tool {
   name = "FileWrite"
-  validate(input: { path: string; content: string }) {
+  validate(input: any) {
+    if (!isObjectInput(input)) {
+      return { ok: false, msg: "Input must be an object" }
+    }
     return input.path && input.content !== undefined
       ? { ok: true }
       : { ok: false, msg: "Missing path or content" }
@@ -238,7 +251,10 @@ export class FileWriteTool extends Tool {
 
 export class FileEditTool extends Tool {
   name = "FileEdit"
-  validate(input: { path: string; oldString: string; newString: string }) {
+  validate(input: any) {
+    if (!isObjectInput(input)) {
+      return { ok: false, msg: "Input must be an object" }
+    }
     if (!input.path) return { ok: false, msg: "Missing path" }
     if (typeof input.oldString !== "string")
       return { ok: false, msg: "Missing oldString" }

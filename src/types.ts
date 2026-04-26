@@ -20,6 +20,11 @@ export interface ToolRunResult {
   error?: string;
 }
 
+export interface GatewayExecuteResult {
+  decision: PermissionDecision;
+  result?: ToolRunResult;
+}
+
 export interface ToolContext {
   mode: PermissionMode;
   cwd: string;
