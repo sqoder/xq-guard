@@ -5,7 +5,16 @@ import { join } from "path"
 import { PermissionEngine } from "../engine"
 import { createGateway } from "../gateway"
 
-function setup() {
+function mockTool(name: string, output: string) {
+  return {
+    name,
+    validate: () => ({ ok: true }),
+    checkPhysicalSafety: async () => null,
+    run: async () => ({ ok: true, output }),
+  } as any
+}
+
+function setup(extraTools: Record<string, any> = {}) {
   const cwd = mkdtempSync(join(tmpdir(), "xq-guard-test-"))
   const engine = new PermissionEngine(cwd)
   const gateway = createGateway({
@@ -16,6 +25,7 @@ function setup() {
       allowedPaths: [cwd],
       interactive: false,
     },
+    tools: extraTools,
   })
   return { cwd, engine, gateway }
 }
@@ -170,6 +180,35 @@ describe("xq-guard gateway", () => {
     expect(rejected.decision.reason).toBe("Auto-deny in non-interactive mode")
   })
 
+  test("plan mode allows local reads but denies open-world tools without rules", async () => {
+    const { cwd, engine } = setup()
+    const readOnlyDecision = await engine.decide(
+      "FileRead",
+      JSON.stringify({ path: "notes.txt" }),
+      { mode: "plan", cwd, allowedPaths: [cwd], interactive: false },
+    )
+    const openWorldDecision = await engine.decide(
+      "WebFetch",
+      JSON.stringify({ url: "https://example.com" }),
+      { mode: "plan", cwd, allowedPaths: [cwd], interactive: false },
+    )
+
+    expect(readOnlyDecision.behavior).toBe("allow")
+    expect(openWorldDecision.behavior).toBe("deny")
+  })
+
+  test("dontAsk mode denies unresolved operations instead of prompting", async () => {
+    const { cwd, engine } = setup()
+    const decision = await engine.decide(
+      "FileRead",
+      JSON.stringify({ path: "notes.txt" }),
+      { mode: "dontAsk", cwd, allowedPaths: [cwd], interactive: true },
+    )
+
+    expect(decision.behavior).toBe("deny")
+    expect(decision.reason).toContain("dontAsk mode")
+  })
+
   test("returns permission suggestions when ask is auto-denied", async () => {
     const { gateway } = setup()
     const result = await gateway.execute("FileRead", {
@@ -260,7 +299,9 @@ describe("xq-guard gateway", () => {
   })
 
   test("deny rule beats mcp server allow rule", async () => {
-    const { gateway, engine } = setup()
+    const { gateway, engine } = setup({
+      "mcp__google__delete": mockTool("mcp__google__delete", "deleted"),
+    })
     await engine.saveRule({
       tool: "mcp__google__*",
       behavior: "allow",
@@ -275,6 +316,25 @@ describe("xq-guard gateway", () => {
       id: "123",
     })
     expect(result.decision.behavior).toBe("deny")
+  })
+
+  test("executes registered MCP tools when allow rules match", async () => {
+    const { gateway, engine } = setup({
+      "mcp__google__search": mockTool("mcp__google__search", "search result"),
+    })
+    await engine.saveRule({
+      tool: "mcp__google__*",
+      behavior: "allow",
+      source: "user",
+    })
+
+    const result = await gateway.execute("mcp__google__search", {
+      query: "xq-guard",
+    })
+
+    expect(result.decision.behavior).toBe("allow")
+    expect(result.result?.ok).toBe(true)
+    expect(result.result?.output).toBe("search result")
   })
 
   test("blocks write in readOnly mode even if allow rule exists", async () => {

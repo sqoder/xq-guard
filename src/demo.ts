@@ -30,13 +30,27 @@ async function runDemo() {
 
     const engine = new PermissionEngine(tempDir);
     const gateway = createGateway({
-        engine,
-        ctx: {
-            mode: "default",
+      engine,
+      ctx: {
+        mode: "default",
             cwd: tempDir,
-            allowedPaths: [tempDir],
-            interactive: false,
-        },
+        allowedPaths: [tempDir],
+        interactive: false,
+      },
+      tools: {
+        "mcp__google__search": {
+          name: "mcp__google__search",
+          validate: () => ({ ok: true }),
+          checkPhysicalSafety: async () => null,
+          run: async () => ({ ok: true, output: "demo search result" }),
+        } as any,
+        "mcp__google__delete": {
+          name: "mcp__google__delete",
+          validate: () => ({ ok: true }),
+          checkPhysicalSafety: async () => null,
+          run: async () => ({ ok: true, output: "demo delete result" }),
+        } as any,
+      },
     });
 
     // 1️⃣ 路径逃逸

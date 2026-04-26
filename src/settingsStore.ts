@@ -40,12 +40,14 @@ function readRulesFile(path: string, source: PermissionRuleSource): PermissionRu
   if (!existsSync(path)) return []
   try {
     const parsed = JSON.parse(readFileSync(path, "utf8"))
-    const rules = Array.isArray(parsed)
+    const rules: Array<Omit<PermissionRule, "id"> | PermissionRule> = Array.isArray(parsed)
       ? parsed
       : Array.isArray(parsed?.rules)
         ? parsed.rules
         : []
-    return rules.map(rule => ruleWithId(rule, source))
+    return rules.map((rule: Omit<PermissionRule, "id"> | PermissionRule) =>
+      ruleWithId(rule, source),
+    )
   } catch {
     return []
   }

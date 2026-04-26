@@ -41,6 +41,7 @@ bun start
 - **`src/engine.ts`**: The core decision-making brain. Handles rule matching (Deny > Ask > Allow) and persistence.
 - **`src/ruleMatcher.ts`**: Permission rule matching, including `Tool(pattern)` syntax such as `FileRead(src/**)`, `Bash(git status*)`, and `WebFetch(domain:example.com)`.
 - **`src/bashPermissions.ts`**: Conservative Bash command assessment for read-only detection and confirmation-required shell operations.
+- **`src/toolRegistry.ts`**: Tool registry and metadata for built-ins, custom tools, and MCP tools.
 - **`src/permissionSuggestions.ts`**: Generates reusable permission choices for tool, path, command-prefix, domain, and MCP server scopes.
 - **`src/settingsStore.ts`**: Loads and saves permission rules across user, project, local, session, and CLI-argument settings layers.
 - **`src/tools.ts`**: Pluggable tool definitions with built-in `checkPhysicalSafety` hooks.
@@ -51,13 +52,15 @@ bun start
 ## 🔒 Security Features
 
 - **ReadOnly Mode**: Switch the global context to `readOnly` to automatically allow safe operations (like `ls` or `cat`) while still blocking destructive ones.
+- **Plan Mode**: Switch the global context to `plan` to allow read-only planning operations while denying writes and unresolved asks.
+- **dontAsk Mode**: Switch the global context to `dontAsk` to auto-deny unresolved operations instead of prompting.
 - **Bypass Mode**: Skips policy-rule matching but does not skip physical safety checks such as path escape and sensitive-file protections.
 - **Tool Pattern Rules**: Allow or deny stable permission targets with `Tool(pattern)` rules while preserving legacy Regex patterns.
 - **WebFetch Domain Rules**: Grant network access by domain with rules like `WebFetch(domain:docs.example.com)`.
 - **Sensitive Path Protection**: Blocks common agent, shell, Git, SSH, editor, and package-manager configuration paths before policy rules are evaluated.
 - **Permission Suggestions**: Ask prompts can suggest one-time choices plus durable rules for exact file paths, Bash prefixes, WebFetch domains, and MCP servers.
 - **Bash Compound Handling**: Simple read-only compound commands such as `git status && pwd` can pass read-only classification, while mutating segments still require confirmation.
-- **Bash Runtime Guardrails**: `Bash` execution supports `timeoutMs`, uses a minimal allowlisted environment, and truncates oversized command output.
+- **Bash Runtime Guardrails**: `Bash` execution supports `timeoutMs`, uses a minimal allowlisted environment, truncates oversized command output, and kills the full detached process group on timeout.
 - **Layered Settings**: Rules can be loaded from user, project, local, session, and CLI-argument sources while preserving legacy `rules.json` compatibility.
 
 ---

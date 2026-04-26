@@ -1,42 +1,29 @@
 import { PermissionEngine } from "./engine";
-import { Tool, FileReadTool, BashTool, FileWriteTool, FileEditTool, WebFetchTool } from "./tools";
+import { Tool } from "./tools";
 import { ToolContext, PermissionDecision, GatewayExecuteResult } from "./types";
 import { buildPermissionSuggestions } from "./permissionSuggestions";
+import { ToolRegistry, createDefaultToolRegistry } from "./toolRegistry";
 
 export interface GatewayOptions {
   engine: PermissionEngine;
   ctx: ToolContext;
   tools?: Record<string, Tool>;
+  registry?: ToolRegistry;
 }
 
 export class PermissionGateway {
   private engine: PermissionEngine;
   private ctx: ToolContext;
-  private tools: Record<string, Tool>;
+  private registry: ToolRegistry;
 
   constructor(options: GatewayOptions) {
     this.engine = options.engine;
     this.ctx = options.ctx;
-    this.tools = options.tools || {
-      "FileRead": new FileReadTool(),
-      "Bash": new BashTool(),
-      "FileWrite": new FileWriteTool(),
-      "FileEdit": new FileEditTool(),
-      "WebFetch": new WebFetchTool()
-    };
+    this.registry = options.registry || createDefaultToolRegistry(options.tools);
   }
 
   async execute(toolName: string, input: any): Promise<GatewayExecuteResult> {
-    const tool = this.tools[toolName] || (
-      toolName.startsWith("mcp__")
-        ? {
-            name: toolName,
-            checkPhysicalSafety: async () => null,
-            run: async () => ({ ok: true, output: "Mock MCP Result" }),
-            validate: () => ({ ok: true }),
-          } as unknown as Tool
-        : null
-    );
+    const tool = this.registry.get(toolName)
 
     if (!tool) {
       const decision = { behavior: "deny" as const, reason: `Tool ${toolName} not found` };

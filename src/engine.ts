@@ -3,6 +3,7 @@ import { resolve, isAbsolute, normalize } from "path"
 import { statSync, existsSync, realpathSync, readFileSync } from "fs"
 import { createHash } from "crypto"
 import { ruleMatchesToolCall, isWriteOperation } from "./ruleMatcher"
+import { assessBashCommand } from "./bashPermissions"
 import {
   PermissionSettingsOptions,
   PermissionSettingsStore,
@@ -122,6 +123,27 @@ export class PermissionEngine {
     ).catch(console.error)
   }
 
+  private isPlanningReadOperation(toolName: string, input: string): boolean {
+    if (toolName === "FileRead") {
+      return true
+    }
+
+    if (toolName === "Bash") {
+      try {
+        const parsed = JSON.parse(input)
+        if (typeof parsed?.cmd !== "string") {
+          return false
+        }
+        const assessment = assessBashCommand(parsed.cmd)
+        return assessment.isReadOnly && !assessment.requiresAsk
+      } catch {
+        return false
+      }
+    }
+
+    return false
+  }
+
   async decide(
     toolName: string,
     input: string,
@@ -139,13 +161,28 @@ export class PermissionEngine {
       if (matchingRules.some(r => r.behavior === "deny")) {
         return { behavior: "deny", reason: "Matched a deny rule" }
       }
-      if (ctx.mode === "readOnly" && isWriteOperation(toolName, input)) {
+      if (
+        (ctx.mode === "readOnly" || ctx.mode === "plan") &&
+        isWriteOperation(toolName, input)
+      ) {
         return {
           behavior: "deny",
-          reason: "Write operation forbidden in ReadOnly mode",
+          reason:
+            ctx.mode === "plan"
+              ? "Write operation forbidden in Plan mode"
+              : "Write operation forbidden in ReadOnly mode",
         }
       }
       if (matchingRules.some(r => r.behavior === "ask")) {
+        if (ctx.mode === "dontAsk" || ctx.mode === "plan") {
+          return {
+            behavior: "deny",
+            reason:
+              ctx.mode === "plan"
+                ? "Plan mode does not prompt for ask rules"
+                : "dontAsk mode does not prompt for ask rules",
+          }
+        }
         return { behavior: "ask", reason: "Matched an ask rule" }
       }
       return { behavior: "allow", reason: "Matched allow rule(s)" }
@@ -159,6 +196,29 @@ export class PermissionEngine {
         }
       }
       return { behavior: "allow", reason: "ReadOnly mode" }
+    }
+
+    if (ctx.mode === "plan") {
+      if (isWriteOperation(toolName, input)) {
+        return {
+          behavior: "deny",
+          reason: "Write operation forbidden in Plan mode",
+        }
+      }
+      if (this.isPlanningReadOperation(toolName, input)) {
+        return { behavior: "allow", reason: "Plan mode read operation" }
+      }
+      return {
+        behavior: "deny",
+        reason: "Plan mode requires an explicit rule for this tool",
+      }
+    }
+
+    if (ctx.mode === "dontAsk") {
+      return {
+        behavior: "deny",
+        reason: "dontAsk mode does not prompt for new permissions",
+      }
     }
 
     if (ctx.mode === "acceptEdits") {

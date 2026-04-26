@@ -1,5 +1,11 @@
 export type PermissionBehavior = 'allow' | 'ask' | 'deny' | 'passthrough';
-export type PermissionMode = 'default' | 'acceptEdits' | 'bypass' | 'readOnly';
+export type PermissionMode =
+  | "default"
+  | "acceptEdits"
+  | "bypass"
+  | "readOnly"
+  | "dontAsk"
+  | "plan";
 export type PermissionRuleSource = 'user' | 'project' | 'local' | 'session' | 'cliArg';
 
 export interface PermissionRule {

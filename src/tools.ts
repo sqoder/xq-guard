@@ -32,6 +32,30 @@ const BASH_ALLOWED_ENV_KEYS = [
   "USER",
 ]
 const BASH_BLOCKED_ENV_PATTERN = /(token|secret|pass|password|key|credential|cookie|auth)/i
+const BASH_SAFE_PATH_CANDIDATES = [
+  "/usr/bin",
+  "/bin",
+  "/usr/sbin",
+  "/sbin",
+  "/opt/homebrew/bin",
+  "/opt/homebrew/sbin",
+  "/usr/local/bin",
+  "/usr/local/sbin",
+  process.env.HOME ? join(process.env.HOME, ".bun/bin") : "",
+].filter(Boolean)
+
+function uniquePaths(paths: string[]): string[] {
+  return [...new Set(paths.filter(Boolean))]
+}
+
+function buildSafePath(): string {
+  const current = (process.env.PATH || "").split(":").filter(Boolean)
+  const safe = uniquePaths([
+    ...current.filter(entry => BASH_SAFE_PATH_CANDIDATES.includes(entry)),
+    ...BASH_SAFE_PATH_CANDIDATES,
+  ])
+  return safe.join(":")
+}
 
 export abstract class Tool {
   abstract name: string
@@ -176,7 +200,7 @@ export class FileReadTool extends Tool {
         : resolve(ctx.cwd, input.path)
       const file = Bun.file(fullPath)
       if (await file.exists()) {
-          return { ok: true, output: await file.text() };
+        return { ok: true, output: await file.text() }
       }
       return { ok: false, output: "", error: "File not found" };
     } catch (e: any) {
@@ -220,6 +244,7 @@ export class BashTool extends Tool {
       if (BASH_BLOCKED_ENV_PATTERN.test(key)) continue
       env[key] = value
     }
+    env.PATH = buildSafePath()
     env.PWD = cwd
     return env
   }
@@ -232,11 +257,82 @@ export class BashTool extends Tool {
   }
 
   private normalizeOutput(stdout: string, stderr: string): string {
-    const combined = [stdout, stderr].filter(Boolean).join("\n").trim()
-    if (combined.length <= BASH_MAX_OUTPUT_CHARS) {
-      return combined
+    return [stdout, stderr].filter(Boolean).join("\n").trim()
+  }
+
+  private buildBashInvocation(cmd: string): string[] {
+    const wrapper = [
+      "eval \"$1\"",
+      "status=$?",
+      "wait || true",
+      "exit \"$status\"",
+    ].join("; ")
+    return ["bash", "-lc", wrapper, "xq-guard", cmd]
+  }
+
+  private killProcessGroup(proc: Bun.Subprocess) {
+    if (proc.pid > 0) {
+      try {
+        process.kill(-proc.pid, "SIGTERM")
+        return
+      } catch {
+        // fall back to killing the direct shell process below
+      }
     }
-    return `${combined.slice(0, BASH_MAX_OUTPUT_CHARS)}\n[truncated at ${BASH_MAX_OUTPUT_CHARS} chars]`
+    try {
+      proc.kill("SIGTERM")
+    } catch {
+      try {
+        proc.kill()
+      } catch {
+        // ignore kill races once the process is gone
+      }
+    }
+  }
+
+  private async readStreamWithLimit(
+    stream: ReadableStream<Uint8Array>,
+    append: (chunk: string) => boolean,
+    stop: () => void,
+  ): Promise<void> {
+    const reader = stream.getReader()
+    const decoder = new TextDecoder()
+    try {
+      while (true) {
+        const { value, done } = await reader.read()
+        if (done) break
+        if (!value || value.length === 0) continue
+        const chunk = decoder.decode(value, { stream: true })
+        if (chunk && !append(chunk)) {
+          stop()
+          try {
+            await reader.cancel()
+          } catch {
+            // ignore cancellation races after kill
+          }
+          break
+        }
+      }
+      const flush = decoder.decode()
+      if (flush) {
+        append(flush)
+      }
+    } catch {
+      // Ignore stream errors after process termination or cancellation.
+    } finally {
+      try {
+        reader.releaseLock()
+      } catch {
+        // no-op
+      }
+    }
+  }
+
+  private truncateOutput(text: string): string {
+    if (text.length <= BASH_MAX_OUTPUT_CHARS) {
+      return text
+    }
+    return text.slice(0, BASH_MAX_OUTPUT_CHARS)
   }
 
   async run(
@@ -245,33 +341,75 @@ export class BashTool extends Tool {
   ): Promise<ToolRunResult> {
     try {
       const timeoutMs = this.normalizeTimeout(input.timeoutMs)
-      const proc = Bun.spawn(["bash", "-lc", input.cmd], {
+      const proc = Bun.spawn(this.buildBashInvocation(input.cmd), {
         cwd: ctx.cwd,
         env: this.buildSafeEnv(ctx.cwd),
         stdout: "pipe",
         stderr: "pipe",
+        detached: true,
       })
-      let timedOut = false
+      let terminalReason: "timeout" | "output" | null = null
+      let outputLength = 0
+      const stdoutParts: string[] = []
+      const stderrParts: string[] = []
+      const appendChunk = (parts: string[], chunk: string) => {
+        if (terminalReason) return false
+        const remaining = BASH_MAX_OUTPUT_CHARS - outputLength
+        if (remaining <= 0) {
+          terminalReason = "output"
+          return false
+        }
+        const next = chunk.length <= remaining ? chunk : chunk.slice(0, remaining)
+        parts.push(next)
+        outputLength += next.length
+        if (next.length < chunk.length || outputLength >= BASH_MAX_OUTPUT_CHARS) {
+          terminalReason = "output"
+          return false
+        }
+        return true
+      }
+      const stop = () => {
+        if (terminalReason === null) {
+          terminalReason = "timeout"
+        }
+        this.killProcessGroup(proc)
+      }
       const timer = setTimeout(() => {
-        timedOut = true
-        proc.kill()
+        stop()
       }, timeoutMs)
 
-      let stdout = ""
-      let stderr = ""
       let exitCode = 0
       try {
-        ;[stdout, stderr, exitCode] = await Promise.all([
-          new Response(proc.stdout).text(),
-          new Response(proc.stderr).text(),
-          proc.exited,
+        await Promise.all([
+          this.readStreamWithLimit(
+            proc.stdout as ReadableStream<Uint8Array>,
+            chunk => appendChunk(stdoutParts, chunk),
+            stop,
+          ),
+          this.readStreamWithLimit(
+            proc.stderr as ReadableStream<Uint8Array>,
+            chunk => appendChunk(stderrParts, chunk),
+            stop,
+          ),
+          proc.exited.then(code => {
+            exitCode = code
+          }),
         ])
       } finally {
         clearTimeout(timer)
       }
 
+      const stdout = this.truncateOutput(stdoutParts.join(""))
+      const stderr = this.truncateOutput(stderrParts.join(""))
       const output = this.normalizeOutput(stdout, stderr)
-      if (timedOut) {
+      if (terminalReason === "output") {
+        return {
+          ok: false,
+          output: output || "(No output)",
+          error: `Command output exceeded ${BASH_MAX_OUTPUT_CHARS} chars`,
+        }
+      }
+      if (terminalReason === "timeout") {
         return {
           ok: false,
           output: output || "(No output)",
