@@ -1,0 +1,9 @@
+{
+  "name": "xq-guard",
+  "version": "1.0.0",
+  "main": "src/index.ts",
+  "type": "module",
+  "scripts": {
+    "start": "bun run src/index.ts"
+  }
+}
