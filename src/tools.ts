@@ -1,4 +1,4 @@
-import { ToolContext, PermissionDecision } from "./types"
+import { ToolContext, PermissionDecision, ToolRunResult } from "./types"
 import {
   resolve,
   relative,

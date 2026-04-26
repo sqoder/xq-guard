@@ -7,5 +7,5 @@
     "start": "bun run src/demo.ts",
     "demo": "bun run src/demo.ts",
     "test": "bun test"
-  },
+  }
 }
