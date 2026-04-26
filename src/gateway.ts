@@ -30,7 +30,7 @@ export class PermissionGateway {
         ? {
             name: toolName,
             checkPhysicalSafety: async () => null,
-            run: async () => "Mock MCP Result",
+            run: async () => ({ ok: true, output: "Mock MCP Result" }),
             validate: () => ({ ok: true }),
           } as unknown as Tool
         : null
