@@ -1,4 +1,4 @@
-import { PermissionEngine, AuditLog } from "./engine";
+import { PermissionEngine } from "./engine";
 import { Tool, FileReadTool, BashTool, FileWriteTool, FileEditTool } from "./tools";
 import { ToolContext, PermissionDecision, GatewayExecuteResult } from "./types";
 

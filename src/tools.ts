@@ -124,7 +124,10 @@ export class FileReadTool extends Tool {
     if (!isObjectInput(input)) {
       return { ok: false, msg: "Input must be an object" }
     }
-    return input.path ? { ok: true } : { ok: false, msg: "Missing path" }
+    if (typeof input.path !== "string" || input.path.length === 0) {
+      return { ok: false, msg: "path must be a non-empty string" }
+    }
+    return { ok: true }
   }
 
   async checkPhysicalSafety(
@@ -156,7 +159,10 @@ export class BashTool extends Tool {
     if (!isObjectInput(input)) {
       return { ok: false, msg: "Input must be an object" }
     }
-    return input.cmd ? { ok: true } : { ok: false, msg: "Empty command" }
+    if (typeof input.cmd !== "string" || input.cmd.length === 0) {
+      return { ok: false, msg: "cmd must be a non-empty string" }
+    }
+    return { ok: true }
   }
 
   async checkPhysicalSafety(
@@ -224,9 +230,13 @@ export class FileWriteTool extends Tool {
     if (!isObjectInput(input)) {
       return { ok: false, msg: "Input must be an object" }
     }
-    return input.path && input.content !== undefined
-      ? { ok: true }
-      : { ok: false, msg: "Missing path or content" }
+    if (typeof input.path !== "string" || input.path.length === 0) {
+      return { ok: false, msg: "path must be a non-empty string" }
+    }
+    if (typeof input.content !== "string") {
+      return { ok: false, msg: "content must be a string" }
+    }
+    return { ok: true }
   }
 
   async checkPhysicalSafety(
@@ -255,11 +265,13 @@ export class FileEditTool extends Tool {
     if (!isObjectInput(input)) {
       return { ok: false, msg: "Input must be an object" }
     }
-    if (!input.path) return { ok: false, msg: "Missing path" }
-    if (typeof input.oldString !== "string")
-      return { ok: false, msg: "Missing oldString" }
+    if (typeof input.path !== "string" || input.path.length === 0) {
+      return { ok: false, msg: "path must be a non-empty string" }
+    }
+    if (typeof input.oldString !== "string" || input.oldString.length === 0)
+      return { ok: false, msg: "oldString must be a non-empty string" }
     if (typeof input.newString !== "string")
-      return { ok: false, msg: "Missing newString" }
+      return { ok: false, msg: "newString must be a string" }
     if (input.oldString === input.newString)
       return { ok: false, msg: "oldString and newString are the same" }
     return { ok: true }
