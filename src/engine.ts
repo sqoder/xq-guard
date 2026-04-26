@@ -2,8 +2,7 @@ import { PermissionRule, PermissionDecision, ToolContext } from "./types"
 import { resolve, isAbsolute, normalize } from "path"
 import { statSync, existsSync, realpathSync, readFileSync } from "fs"
 import { createHash } from "crypto"
-import { isBashWriteOperation } from "./bashPermissions"
-import { ruleMatchesToolCall } from "./ruleMatcher"
+import { ruleMatchesToolCall, isWriteOperation } from "./ruleMatcher"
 import {
   PermissionSettingsOptions,
   PermissionSettingsStore,
@@ -140,7 +139,7 @@ export class PermissionEngine {
       if (matchingRules.some(r => r.behavior === "deny")) {
         return { behavior: "deny", reason: "Matched a deny rule" }
       }
-      if (ctx.mode === "readOnly" && this.isWriteOperation(toolName, input)) {
+      if (ctx.mode === "readOnly" && isWriteOperation(toolName, input)) {
         return {
           behavior: "deny",
           reason: "Write operation forbidden in ReadOnly mode",
@@ -153,7 +152,7 @@ export class PermissionEngine {
     }
 
     if (ctx.mode === "readOnly") {
-      if (this.isWriteOperation(toolName, input)) {
+      if (isWriteOperation(toolName, input)) {
         return {
           behavior: "deny",
           reason: "Write operation forbidden in ReadOnly mode",
@@ -169,18 +168,5 @@ export class PermissionEngine {
     }
 
     return { behavior: "ask", reason: "No matching rule found" }
-  }
-
-  private isWriteOperation(tool: string, input: string): boolean {
-    if (["FileWrite", "FileEdit"].includes(tool)) return true
-    if (tool === "Bash") {
-      try {
-        const parsed = JSON.parse(input)
-        return isBashWriteOperation(parsed.cmd || "")
-      } catch {
-        return true
-      }
-    }
-    return false
   }
 }

@@ -1,9 +1,23 @@
 import { PermissionRule, ToolContext } from "./types"
 import { isAbsolute, relative } from "path"
+import { isBashWriteOperation } from "./bashPermissions"
 
 interface ParsedRuleTool {
   tool: string
   inlinePattern?: string
+}
+
+export function isWriteOperation(toolName: string, input: string): boolean {
+  if (["FileWrite", "FileEdit"].includes(toolName)) return true
+  if (toolName === "Bash") {
+    try {
+      const parsed = JSON.parse(input)
+      return isBashWriteOperation(parsed.cmd || "")
+    } catch {
+      return true
+    }
+  }
+  return false
 }
 
 function parseRuleTool(ruleTool: string): ParsedRuleTool {
