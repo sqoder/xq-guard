@@ -1,12 +1,13 @@
 export type PermissionBehavior = 'allow' | 'ask' | 'deny' | 'passthrough';
 export type PermissionMode = 'default' | 'acceptEdits' | 'bypass' | 'readOnly';
+export type PermissionRuleSource = 'user' | 'project' | 'local' | 'session' | 'cliArg';
 
 export interface PermissionRule {
   id: string;
   tool: string;       // 工具名或 '*' 或 'mcp__server__*'
   pattern?: string;   // 正则匹配输入内容
   behavior: 'allow' | 'deny' | 'ask';
-  source: 'user' | 'project' | 'session';
+  source: PermissionRuleSource;
 }
 
 export interface PermissionSuggestion {

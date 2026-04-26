@@ -1,9 +1,13 @@
 import { PermissionRule, PermissionDecision, ToolContext } from "./types"
-import { join, resolve, isAbsolute, normalize } from "path"
+import { resolve, isAbsolute, normalize } from "path"
 import { statSync, existsSync, realpathSync, readFileSync } from "fs"
 import { createHash } from "crypto"
 import { isBashWriteOperation } from "./bashPermissions"
 import { ruleMatchesToolCall } from "./ruleMatcher"
+import {
+  PermissionSettingsOptions,
+  PermissionSettingsStore,
+} from "./settingsStore"
 
 export interface AuditLog {
   toolName: string
@@ -19,31 +23,24 @@ type FileState = {
   hash: string
 }
 
+export interface PermissionEngineOptions {
+  baseDir: string
+  settings?: PermissionSettingsOptions
+}
+
 export class PermissionEngine {
-  private rules: PermissionRule[] = []
-  private rulesPath: string
+  private settingsStore: PermissionSettingsStore
   private fileStates: Map<string, FileState> = new Map()
   private auditLogs: AuditLog[] = []
 
-  constructor(baseDir: string) {
-    this.rulesPath = join(baseDir, "rules.json")
-    this.loadRulesSync()
-  }
-
-  private loadRulesSync() {
-    try {
-      // Use dynamic import or require depending on environment, Bun supports both
-      const file = require(this.rulesPath)
-      this.rules = file
-    } catch {
-      this.rules = []
-    }
+  constructor(options: string | PermissionEngineOptions) {
+    const baseDir = typeof options === "string" ? options : options.baseDir
+    const settings = typeof options === "string" ? undefined : options.settings
+    this.settingsStore = new PermissionSettingsStore(baseDir, settings)
   }
 
   async saveRule(rule: Omit<PermissionRule, "id">) {
-    const newRule = { ...rule, id: crypto.randomUUID() }
-    this.rules.push(newRule)
-    await Bun.write(this.rulesPath, JSON.stringify(this.rules, null, 2))
+    await this.settingsStore.saveRule(rule)
   }
 
   private canonicalPath(path: string, ctx: ToolContext): string {
@@ -120,8 +117,10 @@ export class PermissionEngine {
 
   logAudit(log: AuditLog) {
     this.auditLogs.push(log)
-    const logPath = join(this.rulesPath, "../audit.log")
-    Bun.write(logPath, JSON.stringify(this.auditLogs, null, 2)).catch(console.error)
+    Bun.write(
+      this.settingsStore.auditPath,
+      JSON.stringify(this.auditLogs, null, 2),
+    ).catch(console.error)
   }
 
   async decide(
@@ -133,7 +132,7 @@ export class PermissionEngine {
       return { behavior: "allow", reason: "Bypass mode" }
     }
 
-    const matchingRules = this.rules.filter(rule =>
+    const matchingRules = this.settingsStore.getRules().filter(rule =>
       ruleMatchesToolCall(rule, toolName, input, ctx),
     )
 
