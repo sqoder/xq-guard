@@ -14,6 +14,12 @@ export interface PermissionDecision {
   reason: string;
 }
 
+export interface ToolRunResult {
+  ok: boolean;
+  output: string;
+  error?: string;
+}
+
 export interface ToolContext {
   mode: PermissionMode;
   cwd: string;

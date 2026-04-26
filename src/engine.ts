@@ -1,6 +1,7 @@
 import { PermissionRule, PermissionDecision, ToolContext } from "./types"
 import { join, resolve, isAbsolute, normalize } from "path"
-import { statSync, existsSync, realpathSync } from "fs"
+import { statSync, existsSync, realpathSync, readFileSync } from "fs"
+import { createHash } from "crypto"
 
 export interface AuditLog {
   toolName: string
@@ -10,10 +11,16 @@ export interface AuditLog {
   result?: string
 }
 
+type FileState = {
+  mtimeMs: number
+  size: number
+  hash: string
+}
+
 export class PermissionEngine {
   private rules: PermissionRule[] = []
   private rulesPath: string
-  private fileStates: Map<string, number> = new Map()
+  private fileStates: Map<string, FileState> = new Map()
   private auditLogs: AuditLog[] = []
 
   constructor(baseDir: string) {
@@ -49,11 +56,20 @@ export class PermissionEngine {
     return normalize(absolutePath)
   }
 
+  private fileHash(path: string): string {
+    const buf = readFileSync(path)
+    return createHash("sha256").update(buf).digest("hex")
+  }
+
   recordFileRead(path: string, ctx: ToolContext) {
     const canonical = this.canonicalPath(path, ctx)
     if (existsSync(canonical)) {
       const stats = statSync(canonical)
-      this.fileStates.set(canonical, stats.mtimeMs)
+      this.fileStates.set(canonical, {
+        mtimeMs: stats.mtimeMs,
+        size: stats.size,
+        hash: this.fileHash(canonical),
+      })
     }
   }
 
@@ -79,8 +95,19 @@ export class PermissionEngine {
       }
     }
     const stats = statSync(canonical)
-    const lastReadMtime = this.fileStates.get(canonical)!
-    if (Math.floor(stats.mtimeMs) > Math.floor(lastReadMtime)) {
+    const current = {
+      mtimeMs: stats.mtimeMs,
+      size: stats.size,
+      hash: this.fileHash(canonical),
+    }
+    const last = this.fileStates.get(canonical)!
+    
+    // 比较 mtimeMs, size 和 hash
+    if (
+      current.mtimeMs !== last.mtimeMs ||
+      current.size !== last.size ||
+      current.hash !== last.hash
+    ) {
       return {
         ok: false,
         reason: `File ${canonical} has been modified since it was last read`,

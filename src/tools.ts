@@ -111,7 +111,7 @@ export abstract class Tool {
     }
   }
 
-  abstract run(input: any, ctx: ToolContext): Promise<string>
+  abstract run(input: any, ctx: ToolContext): Promise<ToolRunResult>
 }
 
 export class FileReadTool extends Tool {
@@ -127,15 +127,18 @@ export class FileReadTool extends Tool {
     return this.isPathEscaped(input.path, ctx)
   }
 
-  async run(input: { path: string }, ctx: ToolContext) {
+  async run(input: { path: string }, ctx: ToolContext): Promise<ToolRunResult> {
     try {
       const fullPath = isAbsolute(input.path)
         ? input.path
         : resolve(ctx.cwd, input.path)
       const file = Bun.file(fullPath)
-      return (await file.exists()) ? await file.text() : "File not found"
+      if (await file.exists()) {
+          return { ok: true, output: await file.text() };
+      }
+      return { ok: false, output: "", error: "File not found" };
     } catch (e: any) {
-      return `Error reading file: ${e.message}`
+      return { ok: false, output: "", error: `Error reading file: ${e.message}` };
     }
   }
 }
@@ -178,7 +181,7 @@ export class BashTool extends Tool {
     return null
   }
 
-  async run(input: { cmd: string }, ctx: ToolContext) {
+  async run(input: { cmd: string }, ctx: ToolContext): Promise<ToolRunResult> {
     try {
       const proc = Bun.spawn(["bash", "-lc", input.cmd], {
         cwd: ctx.cwd,
@@ -192,13 +195,15 @@ export class BashTool extends Tool {
       ])
       const output = [stdout, stderr].filter(Boolean).join("\n").trim()
       if (exitCode !== 0) {
-        return output
-          ? `${output}\nExit code ${exitCode}`
-          : `Exit code ${exitCode}`
+        return { 
+            ok: false, 
+            output: output, 
+            error: output ? `Exit code ${exitCode}` : `Command failed with exit code ${exitCode}` 
+        };
       }
-      return output || "(No output)"
+      return { ok: true, output: output || "(No output)" };
     } catch (e: any) {
-      return `Error running bash: ${e.message}`
+      return { ok: false, output: "", error: `Error running bash: ${e.message}` };
     }
   }
 }
@@ -218,15 +223,15 @@ export class FileWriteTool extends Tool {
     return this.isPathEscaped(input.path, ctx)
   }
 
-  async run(input: { path: string; content: string }, ctx: ToolContext) {
+  async run(input: { path: string; content: string }, ctx: ToolContext): Promise<ToolRunResult> {
     try {
       const fullPath = isAbsolute(input.path)
         ? input.path
         : resolve(ctx.cwd, input.path)
       await Bun.write(fullPath, input.content)
-      return "File written successfully"
+      return { ok: true, output: "File written successfully" };
     } catch (e: any) {
-      return `Error writing file: ${e.message}`
+      return { ok: false, output: "", error: `Error writing file: ${e.message}` };
     }
   }
 }
@@ -254,7 +259,7 @@ export class FileEditTool extends Tool {
   async run(
     input: { path: string; oldString: string; newString: string },
     ctx: ToolContext,
-  ) {
+  ): Promise<ToolRunResult> {
     try {
       const fullPath = isAbsolute(input.path)
         ? input.path
@@ -263,16 +268,16 @@ export class FileEditTool extends Tool {
       const content = await file.text()
       const matches = content.split(input.oldString).length - 1
       if (matches === 0) {
-        return "Error: oldString not found in file"
+        return { ok: false, output: "", error: "Error: oldString not found in file" };
       }
       if (matches > 1) {
-        return "Error: oldString matched multiple times; provide more context"
+        return { ok: false, output: "", error: "Error: oldString matched multiple times; provide more context" };
       }
       const newContent = content.replace(input.oldString, input.newString)
       await Bun.write(fullPath, newContent)
-      return "File edited successfully"
+      return { ok: true, output: "File edited successfully" };
     } catch (e: any) {
-      return `Error editing file: ${e.message}`
+      return { ok: false, output: "", error: `Error editing file: ${e.message}` };
     }
   }
 }
