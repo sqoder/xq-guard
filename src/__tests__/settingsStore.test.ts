@@ -4,6 +4,7 @@ import { tmpdir } from "os"
 import { join } from "path"
 import { mkdtempSync } from "fs"
 import { PermissionEngine } from "../engine"
+import { createGateway } from "../gateway"
 
 function tempDir() {
   return mkdtempSync(join(tmpdir(), "xq-guard-settings-"))
@@ -178,5 +179,131 @@ describe("settings store", () => {
         source: "userSettings",
       },
     ])
+  })
+
+  test("applies replace/remove rule updates and persists them", async () => {
+    const cwd = tempDir()
+    const userSettingsPath = join(cwd, "user-settings.json")
+    const engine = new PermissionEngine({
+      baseDir: cwd,
+      settings: { userSettingsPath },
+    })
+
+    const saved = await engine.saveRule({
+      tool: "Read(src/**)",
+      behavior: "allow",
+      source: "userSettings",
+    })
+
+    const allowed = await engine.decide(
+      "FileRead",
+      JSON.stringify({ path: "src/app.ts" }),
+      { mode: "default", cwd, allowedPaths: [cwd], interactive: false },
+    )
+    expect(allowed.behavior).toBe("allow")
+
+    await engine.applyPermissionUpdate({
+      type: "replaceRules",
+      destination: "userSettings",
+      rules: [{ ...saved, behavior: "deny" }],
+    })
+
+    const denied = await engine.decide(
+      "FileRead",
+      JSON.stringify({ path: "src/app.ts" }),
+      { mode: "default", cwd, allowedPaths: [cwd], interactive: false },
+    )
+    expect(denied.behavior).toBe("deny")
+
+    await engine.applyPermissionUpdate({
+      type: "removeRules",
+      destination: "userSettings",
+      ruleIds: [saved.id],
+    })
+
+    const unresolved = await engine.decide(
+      "FileRead",
+      JSON.stringify({ path: "src/app.ts" }),
+      { mode: "default", cwd, allowedPaths: [cwd], interactive: false },
+    )
+    expect(unresolved.behavior).toBe("ask")
+    expect(readRules(userSettingsPath)).toEqual([])
+  })
+
+  test("setMode and addDirectories updates affect runtime context and persist", async () => {
+    const cwd = tempDir()
+    const outsideDir = mkdtempSync(join(tmpdir(), "xq-guard-outside-"))
+    const outsideFile = join(outsideDir, "outside.txt")
+    writeFileSync(outsideFile, "outside")
+
+    const engine = new PermissionEngine(cwd)
+    await engine.saveRule({
+      tool: "FileRead",
+      behavior: "allow",
+      source: "userSettings",
+    })
+    await engine.saveRule({
+      tool: "FileWrite",
+      behavior: "allow",
+      source: "userSettings",
+    })
+
+    const gateway = createGateway({
+      engine,
+      ctx: {
+        mode: "default",
+        cwd,
+        allowedPaths: [cwd],
+        interactive: false,
+      },
+    })
+
+    const beforeAddDirectories = await gateway.execute("FileRead", {
+      path: outsideFile,
+    })
+    expect(beforeAddDirectories.decision.behavior).toBe("deny")
+
+    await engine.applyPermissionUpdate({
+      type: "addDirectories",
+      directories: [outsideDir],
+    })
+
+    const afterAddDirectories = await gateway.execute("FileRead", {
+      path: outsideFile,
+    })
+    expect(afterAddDirectories.decision.behavior).toBe("allow")
+
+    await engine.applyPermissionUpdate({
+      type: "setMode",
+      mode: "readOnly",
+    })
+
+    const writeInReadOnly = await gateway.execute("FileWrite", {
+      path: "readonly.txt",
+      content: "blocked",
+    })
+    expect(writeInReadOnly.decision.behavior).toBe("deny")
+    expect(writeInReadOnly.decision.reason).toContain("ReadOnly mode")
+
+    const reloaded = new PermissionEngine(cwd)
+    const reloadedGateway = createGateway({
+      engine: reloaded,
+      ctx: {
+        mode: "default",
+        cwd,
+        allowedPaths: [cwd],
+        interactive: false,
+      },
+    })
+
+    const reloadedRead = await reloadedGateway.execute("FileRead", {
+      path: outsideFile,
+    })
+    const reloadedWrite = await reloadedGateway.execute("FileWrite", {
+      path: "readonly-again.txt",
+      content: "blocked again",
+    })
+    expect(reloadedRead.decision.behavior).toBe("allow")
+    expect(reloadedWrite.decision.behavior).toBe("deny")
   })
 })

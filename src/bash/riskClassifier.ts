@@ -255,7 +255,11 @@ function assessSimpleCommand(command: string): BashRiskAssessment {
     return { decision: "allow", isReadOnly: true }
   }
 
-  return { decision: "allow", isReadOnly: false }
+  return {
+    decision: "ask",
+    isReadOnly: false,
+    reason: `Unknown command requires confirmation: ${executable}`,
+  }
 }
 
 export function assessBashCommandRisk(command: string): BashRiskAssessment {

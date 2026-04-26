@@ -1,5 +1,6 @@
 import { randomUUID } from "crypto"
 import { PermissionEngine } from "./engine"
+import { extractBashWritePaths } from "./bashPermissions"
 import { createCliPermissionRequestHandler } from "./permissionEvents"
 import { buildPermissionSuggestions } from "./permissionSuggestions"
 import {
@@ -13,6 +14,8 @@ import {
   PermissionGatewayEvent,
   PermissionRequestHandler,
   PermissionResponse,
+  ToolPermissionContext,
+  ToolRunContext,
   ToolContext,
 } from "./types"
 import { Tool } from "./tools"
@@ -85,12 +88,20 @@ export class PermissionGateway {
   }
 
   async execute(toolName: string, input: any): Promise<GatewayExecuteResult> {
+    const runtimeCtx = this.engine.resolveContext(this.ctx)
+    const permissionCtx = this.engine.resolvePermissionContext(runtimeCtx)
+    const runCtx = this.engine.resolveRunContext(runtimeCtx)
     const { tool, resolutionError } = await this.resolveTool(toolName)
 
     if (!tool) {
       const decision = {
         behavior: "deny" as const,
         reason: resolutionError || `Tool ${toolName} not found`,
+        reasonDetail: {
+          type: "tool" as const,
+          toolName,
+          reason: resolutionError || `Tool ${toolName} not found`,
+        },
       }
       this.engine.logAudit({
         toolName,
@@ -106,6 +117,11 @@ export class PermissionGateway {
       const decision = {
         behavior: "deny" as const,
         reason: validation.msg || "Invalid input",
+        reasonDetail: {
+          type: "tool" as const,
+          toolName,
+          reason: validation.msg || "Invalid input",
+        },
       }
       this.engine.logAudit({
         toolName,
@@ -116,26 +132,43 @@ export class PermissionGateway {
       return { decision }
     }
 
-    const toolDecision = await this.evaluateToolPermissions(tool, input)
+    const toolDecision = await this.evaluateToolPermissions(
+      tool,
+      input,
+      permissionCtx,
+    )
     if (toolDecision?.behavior === "deny") {
+      const structuredToolDecision: PermissionDecision = {
+        ...toolDecision,
+        reasonDetail: toolDecision.reasonDetail || {
+          type: "safetyCheck",
+          reason: toolDecision.reason,
+          classifierApprovable: false,
+        },
+      }
       this.engine.logAudit({
         toolName,
         input: JSON.stringify(input),
-        decision: toolDecision,
+        decision: structuredToolDecision,
         time: new Date().toISOString(),
       })
-      return { decision: toolDecision }
+      return { decision: structuredToolDecision }
     }
 
     let decision = await this.engine.decide(
       toolName,
       JSON.stringify(input),
-      this.ctx,
+      permissionCtx,
     )
     if (toolDecision?.behavior === "ask" && decision.behavior !== "deny") {
       decision = {
         behavior: "ask",
         reason: toolDecision.reason,
+        reasonDetail: toolDecision.reasonDetail || {
+          type: "safetyCheck",
+          reason: toolDecision.reason,
+          classifierApprovable: true,
+        },
       }
     }
 
@@ -145,6 +178,30 @@ export class PermissionGateway {
         input,
         decision as { behavior: "ask"; reason: string },
       )
+    }
+
+    if (decision.behavior === "allow" && toolName === "Bash") {
+      const bashWritePermissionDecision = await this.checkBashWritePathPermissions(
+        input,
+        permissionCtx,
+      )
+      if (bashWritePermissionDecision) {
+        if (bashWritePermissionDecision.behavior === "ask") {
+          decision = await this.handleAsk(
+            "FileWrite",
+            {
+              path:
+                bashWritePermissionDecision.metadata?.writtenPath ||
+                "(bash-derived path)",
+              sourceTool: "Bash",
+              cmd: input?.cmd,
+            },
+            bashWritePermissionDecision,
+          )
+        } else {
+          decision = bashWritePermissionDecision
+        }
+      }
     }
 
     if (decision.behavior !== "allow") {
@@ -158,7 +215,7 @@ export class PermissionGateway {
     }
 
     if (toolName === "FileWrite" || toolName === "FileEdit") {
-      const writeSafety = this.engine.checkWriteSafety(input.path, this.ctx, {
+      const writeSafety = this.engine.checkWriteSafety(input.path, permissionCtx, {
         allowCreate: toolName === "FileWrite",
       })
       if (!writeSafety.ok) {
@@ -176,14 +233,14 @@ export class PermissionGateway {
       }
     }
 
-    const result = await tool.run(input, this.ctx)
+    const result = await tool.run(input, runCtx)
 
     if (toolName === "FileRead" && result.ok) {
-      this.engine.recordFileRead(input.path, this.ctx)
+      this.engine.recordFileRead(input.path, permissionCtx)
     }
 
     if ((toolName === "FileWrite" || toolName === "FileEdit") && result.ok) {
-      this.engine.recordFileRead(input.path, this.ctx)
+      this.engine.recordFileRead(input.path, permissionCtx)
     }
 
     this.engine.logAudit({
@@ -200,15 +257,16 @@ export class PermissionGateway {
   private async evaluateToolPermissions(
     tool: Tool,
     input: any,
+    ctx: ToolPermissionContext,
   ): Promise<PermissionDecision | null> {
     const candidate = tool as Tool & {
       checkPermissions?: (
         input: any,
-        ctx: ToolContext,
+        ctx: ToolPermissionContext,
       ) => Promise<PermissionDecision | null> | PermissionDecision | null
       checkPhysicalSafety?: (
         input: any,
-        ctx: ToolContext,
+        ctx: ToolPermissionContext,
       ) => Promise<PermissionDecision | null> | PermissionDecision | null
     }
 
@@ -220,11 +278,78 @@ export class PermissionGateway {
       candidate.checkPhysicalSafety !== Tool.prototype.checkPhysicalSafety
 
     if (hasCustomCheckPermissions) {
-      return await candidate.checkPermissions(input, this.ctx)
+      return await candidate.checkPermissions(input, ctx)
     }
 
     if (hasCustomCheckPhysicalSafety) {
-      return await candidate.checkPhysicalSafety(input, this.ctx)
+      return await candidate.checkPhysicalSafety(input, ctx)
+    }
+
+    return null
+  }
+
+  private async checkBashWritePathPermissions(
+    input: any,
+    ctx: ToolPermissionContext,
+  ): Promise<PermissionDecision | null> {
+    if (!input || typeof input.cmd !== "string") {
+      return null
+    }
+
+    const writtenPaths = extractBashWritePaths(input.cmd)
+    const fileWriteTool = this.registry.get("FileWrite")
+    for (const path of writtenPaths) {
+      if (fileWriteTool) {
+        const toolDecision = await this.evaluateToolPermissions(
+          fileWriteTool,
+          { path, content: "" },
+          ctx,
+        )
+        if (toolDecision) {
+          return {
+            ...toolDecision,
+            reason:
+              toolDecision.behavior === "ask"
+                ? `Bash command writes to ${path} and requires FileWrite safety confirmation`
+                : `Bash command writes to ${path} but FileWrite safety denied access`,
+            reasonDetail: {
+              type: "tool",
+              toolName: "Bash",
+              reason: `Bash-derived write path ${path} failed FileWrite tool safety`,
+            },
+            metadata: {
+              ...(toolDecision.metadata || {}),
+              writtenPath: path,
+            },
+          }
+        }
+      }
+
+      const decision = await this.engine.decide(
+        "FileWrite",
+        JSON.stringify({ path, content: "" }),
+        ctx,
+      )
+      if (decision.behavior === "allow") {
+        continue
+      }
+
+      return {
+        ...decision,
+        reason:
+          decision.behavior === "ask"
+            ? `Bash command writes to ${path} and requires FileWrite permission`
+            : `Bash command writes to ${path} but FileWrite permission was denied`,
+        reasonDetail: {
+          type: "tool",
+          toolName: "Bash",
+          reason: `Bash-derived write path ${path} requires FileWrite permission`,
+        },
+        metadata: {
+          ...(decision.metadata || {}),
+          writtenPath: path,
+        },
+      }
     }
 
     return null
@@ -235,6 +360,7 @@ export class PermissionGateway {
     input: any,
     decision: { behavior: "ask"; reason: string },
   ): Promise<PermissionDecision> {
+    const runtimeCtx = this.engine.resolveContext(this.ctx)
     const suggestions = buildPermissionSuggestions(toolName, input)
     const requestId = randomUUID()
     const requestedEvent = {
@@ -244,14 +370,14 @@ export class PermissionGateway {
       input,
       reason: decision.reason,
       suggestions,
-      mode: this.ctx.mode,
-      cwd: this.ctx.cwd,
+      mode: runtimeCtx.mode,
+      cwd: runtimeCtx.cwd,
     }
     this.emitPermissionEvent(requestedEvent)
 
     const responder =
       this.permissionRequestHandler ||
-      (this.ctx.interactive ? createCliPermissionRequestHandler() : undefined)
+      (runtimeCtx.interactive ? createCliPermissionRequestHandler() : undefined)
 
     if (!responder) {
       const denied: PermissionDecision = {

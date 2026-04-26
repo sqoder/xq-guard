@@ -110,4 +110,12 @@ describe("bash permissions", () => {
       requiresAsk: true,
     })
   })
+
+  test("asks for unknown commands by default", () => {
+    expect(assessBashCommand("unknown-binary --flag")).toMatchObject({
+      decision: "ask",
+      isReadOnly: false,
+      requiresAsk: true,
+    })
+  })
 })

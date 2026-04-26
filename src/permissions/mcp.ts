@@ -1,6 +1,6 @@
 import { ToolRegistry } from "../toolRegistry"
 import { Tool } from "../tools"
-import { ToolContext, ToolRunResult } from "./types"
+import { PermissionDecision, ToolContext, ToolRunResult } from "./types"
 
 const MCP_TOOL_PATTERN = /^mcp__([^_]+)__(.+)$/
 
@@ -115,6 +115,7 @@ export class McpProxyTool extends Tool {
   private remoteToolName: string
   private manager: McpClientManager
   private customValidate?: (input: unknown) => { ok: boolean; msg?: string }
+  private destructive: boolean
 
   constructor(
     name: string,
@@ -122,6 +123,7 @@ export class McpProxyTool extends Tool {
     remoteToolName: string,
     manager: McpClientManager,
     customValidate?: (input: unknown) => { ok: boolean; msg?: string },
+    options: { destructive?: boolean } = {},
   ) {
     super()
     this.name = name
@@ -129,6 +131,7 @@ export class McpProxyTool extends Tool {
     this.remoteToolName = remoteToolName
     this.manager = manager
     this.customValidate = customValidate
+    this.destructive = Boolean(options.destructive)
   }
 
   validate(input: unknown) {
@@ -136,6 +139,19 @@ export class McpProxyTool extends Tool {
       return this.customValidate(input)
     }
     return validateMcpInput(input)
+  }
+
+  async checkPermissions(
+    _input: unknown,
+    _ctx: ToolContext,
+  ): Promise<PermissionDecision | null> {
+    if (!this.destructive) {
+      return null
+    }
+    return {
+      behavior: "ask",
+      reason: `MCP tool ${this.name} is marked destructive and requires explicit approval`,
+    }
   }
 
   async run(input: unknown, ctx: ToolContext): Promise<ToolRunResult> {
@@ -178,6 +194,7 @@ function registerMcpDescriptor(
       parsed.toolName,
       manager,
       descriptor.validate,
+      { destructive: descriptor.destructive },
     ),
     {
       source: "mcp",

@@ -1,4 +1,10 @@
 import {
+  PermissionUpdate,
+  PermissionUpdateInput,
+  PermissionRuleSource,
+  ToolPermissionContext,
+  ToolRunContext,
+  normalizePermissionMode,
   PermissionRule,
   PermissionRuleInput,
   PermissionDecision,
@@ -45,6 +51,74 @@ export class PermissionEngine {
 
   async saveRule(rule: PermissionRuleInput | PermissionRule) {
     return this.settingsStore.saveRule(rule)
+  }
+
+  async applyPermissionUpdate(update: PermissionUpdateInput): Promise<PermissionUpdate> {
+    return this.settingsStore.applyPermissionUpdate(update)
+  }
+
+  async applyPermissionUpdates(
+    updates: PermissionUpdateInput[],
+  ): Promise<PermissionUpdate[]> {
+    return this.settingsStore.applyPermissionUpdates(updates)
+  }
+
+  resolveContext(ctx: ToolContext): ToolContext {
+    const layeredMode = this.settingsStore.getMode()
+    const mergedAllowedPaths = [
+      ...(ctx.allowedPaths || []),
+      ...this.settingsStore.getDirectories(),
+    ]
+    const ruleBuckets = this.settingsStore.getRuleStringBucketsByBehavior()
+    const additionalWorkingDirectories = new Map<
+      string,
+      { path: string; source: PermissionRuleSource }
+    >()
+    for (const dir of this.settingsStore.getDirectories()) {
+      additionalWorkingDirectories.set(dir, {
+        path: dir,
+        source: "session",
+      })
+    }
+    if (ctx.additionalWorkingDirectories) {
+      for (const [key, value] of ctx.additionalWorkingDirectories.entries()) {
+        additionalWorkingDirectories.set(key, value)
+      }
+    }
+
+    const normalizedMode =
+      ctx.mode === "default"
+        ? normalizePermissionMode(layeredMode)
+        : normalizePermissionMode(ctx.mode)
+
+    return {
+      ...ctx,
+      mode: normalizedMode,
+      allowedPaths: [...new Set(mergedAllowedPaths.filter(Boolean))],
+      additionalWorkingDirectories,
+      alwaysAllowRules: ctx.alwaysAllowRules || ruleBuckets.alwaysAllowRules,
+      alwaysDenyRules: ctx.alwaysDenyRules || ruleBuckets.alwaysDenyRules,
+      alwaysAskRules: ctx.alwaysAskRules || ruleBuckets.alwaysAskRules,
+      shouldAvoidPermissionPrompts:
+        typeof ctx.shouldAvoidPermissionPrompts === "boolean"
+          ? ctx.shouldAvoidPermissionPrompts
+          : normalizedMode === "dontAsk" || ctx.interactive === false,
+      isBypassPermissionsModeAvailable:
+        typeof ctx.isBypassPermissionsModeAvailable === "boolean"
+          ? ctx.isBypassPermissionsModeAvailable
+          : true,
+    }
+  }
+
+  resolvePermissionContext(ctx: ToolContext): ToolPermissionContext {
+    return this.resolveContext(ctx)
+  }
+
+  resolveRunContext(ctx: ToolContext): ToolRunContext {
+    return {
+      cwd: ctx.cwd,
+      env: ctx.env,
+    }
   }
 
   private canonicalPath(path: string, ctx: ToolContext): string {
@@ -132,6 +206,12 @@ export class PermissionEngine {
     input: string,
     ctx: ToolContext,
   ): Promise<PermissionDecision> {
-    return hasPermissionsToUseTool(toolName, input, ctx, this.settingsStore.getRules())
+    const effectiveCtx = this.resolveContext(ctx)
+    return hasPermissionsToUseTool(
+      toolName,
+      input,
+      effectiveCtx,
+      this.settingsStore.getRules(),
+    )
   }
 }

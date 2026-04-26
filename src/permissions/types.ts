@@ -48,6 +48,39 @@ export interface PermissionRule extends PermissionRuleInput {
   tool: string
 }
 
+export interface PermissionRuleConflict {
+  id: string
+  source: PermissionRuleSource
+  behavior: PermissionBehavior
+  tool: string
+}
+
+export type PermissionDecisionReason =
+  | {
+      type: "rule"
+      rule: PermissionRule
+      conflicts?: PermissionRuleConflict[]
+    }
+  | {
+      type: "mode"
+      mode: PermissionMode
+      reason: string
+    }
+  | {
+      type: "workingDir"
+      reason: string
+    }
+  | {
+      type: "safetyCheck"
+      reason: string
+      classifierApprovable: boolean
+    }
+  | {
+      type: "tool"
+      toolName: string
+      reason: string
+    }
+
 export interface PermissionSuggestion {
   id: string
   key: string
@@ -109,6 +142,7 @@ export interface PermissionResultMetadata {
 export interface PermissionResult {
   behavior: PermissionBehavior
   reason: string
+  reasonDetail?: PermissionDecisionReason
   suggestions?: PermissionSuggestion[]
   updates?: PermissionUpdate[]
   updatedInput?: unknown
@@ -125,6 +159,7 @@ export interface ToolRunResult {
   ok: boolean
   output: string
   error?: string
+  data?: unknown
 }
 
 export interface GatewayExecuteResult {
@@ -132,12 +167,28 @@ export interface GatewayExecuteResult {
   result?: ToolRunResult
 }
 
-export interface ToolContext {
+export interface ToolPermissionContext {
   mode: PermissionMode
   cwd: string
   allowedPaths: string[]
+  additionalWorkingDirectories: Map<
+    string,
+    { path: string; source: PermissionRuleSource }
+  >
+  alwaysAllowRules: Record<PermissionRuleSource, string[]>
+  alwaysDenyRules: Record<PermissionRuleSource, string[]>
+  alwaysAskRules: Record<PermissionRuleSource, string[]>
+  shouldAvoidPermissionPrompts?: boolean
+  isBypassPermissionsModeAvailable?: boolean
   interactive?: boolean
 }
+
+export interface ToolRunContext {
+  cwd: string
+  env?: Record<string, string>
+}
+
+export interface ToolContext extends ToolPermissionContext, ToolRunContext {}
 
 export const CANONICAL_PERMISSION_MODES: Exclude<PermissionMode, "bypass">[] = [
   "default",

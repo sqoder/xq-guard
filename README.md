@@ -1,71 +1,164 @@
 # xq-guard
 
-**A permission gateway for AI agents, built with [Bun](https://bun.sh) and TypeScript.**
+`xq-guard` is a permission gateway between an AI agent and host tools/filesystem.
 
----
+It focuses on five core boundaries:
+1. Permission management
+2. File read
+3. File write/edit
+4. Permission confirmation
+5. Security boundary enforcement
 
-## 🌟 Overview
+## Quick Start
 
-`xq-guard` is a strategic security layer designed to sit between an AI Agent and the host system. It implements a three-tier defense mechanism to ensure that agentic tool usage is safe, observable, and controllable.
+Prerequisite: [Bun](https://bun.sh).
 
-### The Three Layers of Defense:
-1. **Physical Sandbox Check**: Tool-level filesystem and shell safety checks run before policy decisions.
-2. **Policy Engine**: Structured permission rules match tool names plus optional scoped content such as file globs, Bash prefixes, WebFetch domains, and MCP tool names.
-3. **Human-in-the-Loop (HITL)**: An interactive CLI prompt can approve once, deny once, or persist durable rules when no existing policy matches.
-
----
-
-## 🚀 Quick Start
-
-### Prerequisites
-- [Bun](https://bun.sh) installed on your system.
-
-### Installation
 ```bash
 git clone https://github.com/sqoder/xq-guard.git
 cd xq-guard
 bun install
+bun test
 ```
 
-### Run the Demo
-```bash
-bun start
-```
+## Permission Model
 
----
+Decision flow in `src/gateway.ts`:
+1. Resolve tool (built-in/custom/MCP)
+2. Validate input
+3. Run tool-level `checkPermissions()`
+4. Run policy engine decision (`src/permissions/hasPermissionsToUseTool.ts`)
+5. Handle `ask` through pluggable permission handler (`permission.requested` / `permission.responded`)
+6. Enforce write safety (`read-before-write`)
+7. Execute tool
+8. Update file-read state and audit log
 
-## 🛠 Architecture
+Priority model:
+- Explicit `deny` rule wins first.
+- Tool safety deny/ask still applies even in bypass mode.
+- `ask` rules are honored unless mode semantics deny prompts (`dontAsk`, `plan`).
+- Allow rules only allow matching scope; unresolved actions still ask/deny by mode.
 
-- **`src/gateway.ts`**: End-to-end execution flow for validation, tool-level permission checks, policy decisions, permission request events, read-before-write safety, execution, and audit logging.
-- **`src/engine.ts`**: Permission-state coordination for rule persistence, audit logging, and read-before-write tracking.
-- **`src/tools.ts`**: Built-in tool implementations with `checkPermissions()` and runtime safety checks for files, Bash, and network access.
-- **`src/permissions/`**: Structured permission modules for types, modes, rule parsing, rule matching, settings layers, updates, filesystem helpers, MCP client integration, and the shared `hasPermissionsToUseTool()` policy core.
-- **`src/bash/` + `src/bashPermissions.ts`**: Bash tokenizer/splitter/redirection/risk-classifier/rule-matcher modules with compatibility exports.
-- **`src/toolRegistry.ts`**: Tool registry and metadata for built-ins, custom tools, and MCP tools.
-- **`src/permissionSuggestions.ts`**: Generates reusable permission choices for tool, path, command-prefix, domain, and MCP server scopes.
-- **`src/permissionEvents.ts`**: Event-oriented permission request handler helpers (CLI responder included for compatibility).
-- **`src/index.ts`**: Package exports for the public API surface.
+## Permission Modes
 
----
+Supported modes:
+- `default`
+- `acceptEdits`
+- `bypassPermissions` (legacy `bypass` normalized here)
+- `dontAsk`
+- `plan`
+- `auto`
+- `bubble`
+- `readOnly`
 
-## 🔒 Security Features
+`readOnly`/`plan` deny write operations. `dontAsk` denies unresolved asks. `bypassPermissions` does not bypass explicit deny or tool safety.
 
-- **ReadOnly Mode**: Switch the global context to `readOnly` to automatically allow safe operations (like `ls` or `cat`) while still blocking destructive ones.
-- **Plan Mode**: Switch the global context to `plan` to allow read-only planning operations while denying writes and unresolved asks.
-- **dontAsk Mode**: Switch the global context to `dontAsk` to auto-deny unresolved operations instead of prompting.
-- **Bypass Mode**: Skips only unresolved default prompts. Explicit `deny` and `ask` rules still win, and tool-level safety checks still run before policy allow.
-- **Tool Pattern Rules**: Allow or deny stable permission targets with `Tool(pattern)` rules while preserving legacy Regex patterns.
-- **WebFetch Domain Rules**: Grant network access by domain with rules like `WebFetch(domain:docs.example.com)`.
-- **Permission Events**: `permission.requested` / `permission.responded` events support CLI, TUI, HTTP, and headless agent integrations without coupling to stdin.
-- **Sensitive Path Protection**: Blocks common agent, shell, Git, SSH, editor, and package-manager configuration paths before policy rules are evaluated.
-- **Permission Suggestions**: Ask prompts can suggest one-time choices plus durable rules for exact file paths, Bash prefixes, WebFetch domains, and MCP servers.
-- **Bash Compound Handling**: Simple read-only compound commands such as `git status && pwd` can pass read-only classification, while mutating segments, dynamic shell execution, and sensitive redirections require confirmation or are denied.
-- **Bash Runtime Guardrails**: `Bash` execution supports `timeoutMs`, uses a minimal allowlisted environment, truncates oversized command output, and kills the full detached process group on timeout.
-- **Layered Settings**: Rules can be loaded from user, project, local, session, and CLI-argument sources while preserving legacy `rules.json` compatibility.
-- **MCP Client Manager**: Dynamically loads MCP tool schemas by server and dispatches real `callTool` invocations through a pluggable manager.
+## Rule Syntax
 
----
+Rules can use plain tool names or scoped `Tool(content)` syntax:
+- `Bash(git status*)`
+- `Bash(npm run:*)`
+- `WebFetch(domain:example.com)`
+- `FileRead(src/**)` / `Read(src/**)`
+- `FileEdit(package.json)` / `Edit(package.json)`
+- `mcp__github__*`
+- `mcp__github__delete`
 
-## 📝 License
+Rule sources/layers include:
+- `policySettings`
+- `flagSettings`
+- `localSettings`
+- `projectSettings`
+- `userSettings`
+- `session`
+- `command`
+- `cliArg`
+
+## Permission Updates and Settings
+
+`PermissionUpdate` is fully applied and persisted by `src/permissions/settingsStore.ts`:
+- `addRules`
+- `replaceRules`
+- `removeRules`
+- `setMode`
+- `addDirectories`
+- `removeDirectories`
+
+Runtime context overlays mode/directories/rule buckets into `ToolPermissionContext`.
+
+## File Read Permissions
+
+`FileRead` supports:
+- Path safety checks and allowed-root enforcement
+- `offset` / `limit` line-range reads
+- `includeLineNumbers`
+- `maxSizeBytes` and output truncation (`maxOutputChars`)
+- Binary-file rejection
+- `file_unchanged` cache result mode
+- Similar-path suggestions for missing files
+
+## File Write/Edit Permissions
+
+`FileWrite` and `FileEdit` enforce:
+- Read-before-write safety (engine state + hash/mtime/size checks)
+- Path/sensitive-file safety checks in `checkPermissions()`
+- Secret-like content ask gate
+- Structured output metadata (`create`/`update`, `diff`, `hashBefore`, `hashAfter`)
+- Post-write verification and rollback-on-failure best effort
+- `FileEdit.replaceAll` support with multi-match guard
+
+## Permission Events
+
+Permission confirmation is event-based:
+- `permission.requested`
+- `permission.responded`
+
+Gateway accepts a pluggable `PermissionRequestHandler` (CLI/TUI/HTTP/headless).
+
+## Security Boundaries
+
+Filesystem/path protections include:
+- CWD/allowed-roots escape prevention (realpath-aware)
+- Sensitive directory/file denylist (`.git`, `.claude`, `.env`, shell/git configs, etc.)
+- Network/protocol/UNC path block
+- `/dev/*` block
+- Cross-platform bypass checks:
+  - NTFS ADS (`file.txt:stream`)
+  - 8.3 short names (`GIT~1`)
+  - Windows long-path/device prefixes (`\\?\`, `\\.\`)
+  - DOS device names (`CON`, `NUL`, ...)
+  - trailing dot/space segments
+  - suspicious multi-dot segments
+
+Bash protections include:
+- Command risk classifier (`allow`/`ask`/`deny`)
+- Remote script pipeline block (`curl|bash` style)
+- Sensitive redirection target block
+- Unknown-command default ask
+- Runtime isolation: sanitized env/PATH, timeout, output cap, process-group kill
+- Bash-derived write-path linkage to `FileWrite` permission + safety checks
+
+## Test Matrix
+
+`bun test` covers:
+- Mode semantics (`plan`, `dontAsk`, `readOnly`, `bypassPermissions`)
+- Deny precedence and rule-source layering
+- Permission updates persistence/runtime effect
+- Read-before-write and external-modification detection
+- Path traversal/symlink/bypass pattern defense
+- Bash risk classification + runtime guards
+- MCP wildcard/specific/destructive behavior
+- File tool size/binary/range/read-cache/diff/replaceAll behavior
+
+## Architecture Map
+
+- `src/gateway.ts`: execution and permission orchestration
+- `src/engine.ts`: context overlay, decision entry, file-state safety, audit
+- `src/tools.ts`: built-in tool implementations and tool-level checks
+- `src/permissions/*`: rule parsing/matching/precedence/settings/MCP/filesystem
+- `src/bash/*`: bash tokenize/split/redirection/classification/rule matching
+- `src/permissionEvents.ts`: pluggable permission request handlers
+- `src/toolRegistry.ts`: built-in/custom/MCP tool registration and metadata
+
+## License
 
 MIT © [sqoder](https://github.com/sqoder)
