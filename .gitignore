@@ -1,3 +1,8 @@
 node_modules/
 rules.json
 .DS_Store
+audit.log
+*.txt
+.env*
+dist/
+build/

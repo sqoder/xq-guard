@@ -3,7 +3,7 @@ export type PermissionMode = 'default' | 'acceptEdits' | 'bypass' | 'readOnly';
 
 export interface PermissionRule {
   id: string;
-  tool: string;       // 工具名或 '*'
+  tool: string;       // 工具名或 '*' 或 'mcp__server__*'
   pattern?: string;   // 正则匹配输入内容
   behavior: 'allow' | 'deny' | 'ask';
   source: 'user' | 'project' | 'session';
@@ -18,4 +18,5 @@ export interface ToolContext {
   mode: PermissionMode;
   cwd: string;
   allowedPaths: string[];
+  interactive?: boolean;
 }

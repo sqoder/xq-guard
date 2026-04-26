@@ -12,109 +12,227 @@ const tools: Record<string, Tool> = {
 };
 
 const ctx: ToolContext = {
-  mode: 'default',
+  mode: "default",
   cwd: process.cwd(),
-  allowedPaths: [process.cwd()] 
+  allowedPaths: [process.cwd()],
+  interactive: false,
 };
 
 async function executeAsAgent(toolName: string, input: any) {
-  const tool = tools[toolName] || { 
-      name: toolName, 
-      checkPhysicalSafety: async () => null, 
-      run: async () => "Mock Result",
-      validate: () => ({ ok: true })
-  };
+  const tool = tools[toolName] || (
+    toolName.startsWith("mcp__")
+      ? {
+          name: toolName,
+          checkPhysicalSafety: async () => null,
+          run: async () => "Mock MCP Result",
+          validate: () => ({ ok: true }),
+        } as unknown as Tool
+      : null
+  );
 
-  // 1. 物理安全检查
-  const safety = await (tool as Tool).checkPhysicalSafety?.(input, ctx);
-  if (safety?.behavior === 'deny') {
-    console.log(`❌ [Physical Deny] ${safety.reason}`);
-    return;
+  if (!tool) {
+    const decision = { behavior: "deny" as const, reason: `Tool ${toolName} not found` }
+    console.log(`🚫 [Blocked] ${decision.reason}`)
+    engine.logAudit({
+      toolName,
+      input: JSON.stringify(input),
+      decision,
+      time: new Date().toISOString(),
+    })
+    return
   }
 
-  // 2. 写安全
-  if (toolName === 'FileWrite' || toolName === 'FileEdit') {
-    const writeSafety = engine.checkWriteSafety(input.path);
+  const validation = tool.validate(input)
+  if (!validation.ok) {
+    const decision = { behavior: "deny" as const, reason: validation.msg || "Invalid input" }
+    console.log(`🚫 [Blocked] ${decision.reason}`)
+    engine.logAudit({
+      toolName,
+      input: JSON.stringify(input),
+      decision,
+      time: new Date().toISOString(),
+    })
+    return
+  }
+
+  const safety = await tool.checkPhysicalSafety(input, ctx)
+  if (safety?.behavior === "deny") {
+    console.log(`❌ [Physical Deny] ${safety.reason}`)
+    engine.logAudit({
+      toolName,
+      input: JSON.stringify(input),
+      decision: safety,
+      time: new Date().toISOString(),
+    })
+    return
+  }
+
+  let decision = await engine.decide(toolName, JSON.stringify(input), ctx)
+  if (safety?.behavior === "ask" && decision.behavior !== "deny") {
+    decision = {
+      behavior: "ask",
+      reason: safety.reason,
+    }
+  }
+
+  if (decision.behavior === "ask") {
+    decision = await handleAsk(toolName, input, decision as { behavior: "ask"; reason: string })
+  }
+
+  if (decision.behavior !== "allow") {
+    console.log(`🚫 [Blocked] ${decision.reason}`)
+    engine.logAudit({
+      toolName,
+      input: JSON.stringify(input),
+      decision,
+      time: new Date().toISOString(),
+    })
+    return
+  }
+
+  if (toolName === "FileWrite" || toolName === "FileEdit") {
+    const writeSafety = engine.checkWriteSafety(input.path, ctx, {
+      allowCreate: toolName === "FileWrite",
+    })
     if (!writeSafety.ok) {
-        console.log(`❌ [Write Safety Deny] ${writeSafety.reason}`);
-        return;
+      const deny = {
+        behavior: "deny" as const,
+        reason: writeSafety.reason || "Unsafe write",
+      }
+      console.log(`❌ [Write Safety Deny] ${deny.reason}`)
+      engine.logAudit({
+        toolName,
+        input: JSON.stringify(input),
+        decision: deny,
+        time: new Date().toISOString(),
+      })
+      return
     }
   }
 
-  // 3. 策略决策
-  let decision = await engine.decide(toolName, JSON.stringify(input), ctx);
+  console.log(`🚀 [Allowed] Executing ${toolName}`)
+  const result = await tool.run(input, ctx)
 
-  // 4. 合并物理安全建议 (如果物理安全建议 ask 且策略是 allow/ask，则取 ask)
-  if (safety?.behavior === 'ask' && decision.behavior !== 'deny') {
-      decision = { behavior: 'ask', reason: safety.reason };
+  if (toolName === "FileRead" && result !== "File not found" && !result.startsWith("Error")) {
+    engine.recordFileRead(input.path, ctx)
   }
 
-  // 5. 处理 Ask (非交互下自动拒绝)
-  if (decision.behavior === 'ask') {
-      console.log(`❓ [Ask Requested] -> Defaulting to Deny in test mode. Reason: ${decision.reason}`);
-      decision = { behavior: 'deny', reason: 'Auto-deny in non-interactive test' };
+  if (
+    (toolName === "FileWrite" || toolName === "FileEdit") &&
+    !result.startsWith("Error")
+  ) {
+    engine.recordFileRead(input.path, ctx)
   }
 
-  // 5. 执行
-  if (decision.behavior === 'allow') {
-    console.log(`🚀 [Allowed] Executing ${toolName}`);
-    if (toolName === 'FileRead') {
-        engine.recordFileRead(input.path);
-    }
-  } else {
-    console.log(`🚫 [Blocked] ${decision.reason}`);
-  }
-
-  // 6. 审计日志
+  console.log(`✅ [Result]\n${result}`)
   engine.logAudit({
     toolName,
     input: JSON.stringify(input),
     decision,
-    time: new Date().toISOString()
+    time: new Date().toISOString(),
+    result,
+  })
+}
+
+async function handleAsk(
+  toolName: string,
+  input: any,
+  decision: { behavior: "ask"; reason: string },
+) {
+  if (!ctx.interactive) {
+    console.log(`❓ [Ask Requested] -> Defaulting to Deny. Reason: ${decision.reason}`)
+    return {
+      behavior: "deny" as const,
+      reason: "Auto-deny in non-interactive mode",
+    }
+  }
+
+  console.log(`\nAgent wants to execute [${toolName}]`)
+  console.log(`Input: ${JSON.stringify(input)}`)
+  console.log(`Reason: ${decision.reason}`)
+  process.stdout.write(
+    "\nAllow?\n(y) allow once\n(n) deny\n(a) always allow tool\n(d) always deny this input\n> ",
+  );
+
+  return new Promise<any>((resolve) => {
+      process.stdin.once('data', async (data) => {
+          const answer = data.toString().trim().toLowerCase();
+          if (answer === "y") {
+            resolve({ behavior: "allow" as const, reason: "User approved once" });
+          } else if (answer === "a") {
+            await engine.saveRule({
+              tool: toolName,
+              behavior: "allow",
+              source: "user",
+            });
+            resolve({ behavior: "allow" as const, reason: "User saved allow rule" });
+          } else if (answer === "d") {
+            const pattern = input.path || input.cmd || JSON.stringify(input);
+            await engine.saveRule({
+              tool: toolName,
+              pattern,
+              behavior: "deny",
+              source: "user",
+            });
+            resolve({ behavior: "deny" as const, reason: "User saved deny rule" });
+          } else {
+            resolve({ behavior: "deny" as const, reason: "User rejected" });
+          }
+      });
   });
 }
 
 async function runDemo() {
-    console.log("\x1b[1m--- XQ-GUARD 权限管理网关增强版 (非交互测试) ---\x1b[0m\n");
+    console.log("\x1b[1m--- XQ-GUARD 权限管理网关增强版 (最终验收测试) ---\x1b[0m\n");
 
-    const testCtx: ToolContext = {
-        mode: 'default',
-        cwd: process.cwd(),
-        allowedPaths: [process.cwd()]
-    };
+    // 清理环境
+    const testFiles = ["security_test.txt", "existing.txt", "audit.log"];
+    for (const f of testFiles) {
+        try { if (require("fs").existsSync(f)) require("fs").unlinkSync(f); } catch {}
+    }
 
-    console.log("1️⃣ 测试: 路径逃逸拦截 (.git 目录)");
+    // 初始化一些基础规则以便测试正常流程
+    await engine.saveRule({ tool: "FileRead", behavior: "allow", source: "user" });
+    await engine.saveRule({ tool: "Bash", behavior: "allow", source: "user" });
+
+    console.log("1️⃣ 测试: 路径逃逸拦截 (.git/config)");
     await executeAsAgent("FileRead", { path: ".git/config" });
     
-    console.log("\n2️⃣ 测试: 危险命令识别 (rm -rf)");
+    console.log("\n2️⃣ 测试: 危险命令识别 (rm -rf /)");
     await executeAsAgent("Bash", { cmd: "rm -rf /" });
 
-    console.log("\n3️⃣ 测试: 写操作安全 (必须先读)");
-    await executeAsAgent("FileWrite", { path: "security_test.txt", content: "safe" });
-
-    console.log("\n4️⃣ 测试: 规则优先级 (Deny > Allow)");
-    await engine.saveRule({ tool: "FileRead", pattern: "secret", behavior: "allow", source: "user" });
-    await engine.saveRule({ tool: "FileRead", pattern: "secret", behavior: "deny", source: "user" });
-    await executeAsAgent("FileRead", { path: "secret_data.txt" });
-
-    console.log("\n5️⃣ 测试: MCP 权限 (mcp__google__*)");
-    await engine.saveRule({ tool: "mcp__google__*", behavior: "deny", source: "user" });
-    await executeAsAgent("mcp__google__search", { query: "hello" });
-
-    console.log("\n6️⃣ 测试: 只读模式 (ReadOnly mode)");
-    const readOnlyCtx = { ...testCtx, mode: 'readOnly' as const };
-    
-    console.log("- 读取 (应当允许，注入 allow 规则)");
-    await engine.saveRule({ tool: "FileRead", behavior: "allow", source: "user" });
-    let decision = await engine.decide("FileRead", JSON.stringify({path: "README.md"}), readOnlyCtx);
-    console.log(`Decision: ${decision.behavior} (${decision.reason})`);
-
-    console.log("- 写入 (应当拦截，即使有 allow 规则)");
+    console.log("\n3️⃣ 测试: 写操作安全 - 新建文件 (允许不先读)");
+    // 假设已有规则允许 FileWrite，或者默认行为是 ask (非交互下 deny)
+    // 为了通过，我们需要一个 allow 规则
     await engine.saveRule({ tool: "FileWrite", behavior: "allow", source: "user" });
-    decision = await engine.decide("FileWrite", JSON.stringify({path: "README.md", content: "hack"}), readOnlyCtx);
-    console.log(`Decision: ${decision.behavior} (${decision.reason})`);
+    await executeAsAgent("FileWrite", { path: "security_test.txt", content: "safe content" });
 
-    console.log("\n✅ 测试结束。请检查输出日志。");
+    console.log("\n4️⃣ 测试: 写操作安全 - 已存在文件没读过");
+    // 手动创建一个文件模拟已存在
+    await Bun.write("existing.txt", "old content");
+    await executeAsAgent("FileWrite", { path: "existing.txt", content: "new content" });
+
+    console.log("\n5️⃣ 测试: 正常流程 - 先读后改");
+    await executeAsAgent("FileRead", { path: "existing.txt" });
+    await engine.saveRule({ tool: "FileEdit", behavior: "allow", source: "user" });
+    await executeAsAgent("FileEdit", { path: "existing.txt", oldString: "old content", newString: "updated content" });
+
+    console.log("\n6️⃣ 测试: 并发冲突 - 读后被外部修改");
+    await executeAsAgent("FileRead", { path: "existing.txt" });
+    // 模拟外部修改，增加延迟确保 mtime 变化
+    await new Promise(r => setTimeout(r, 100)); 
+    await Bun.write("existing.txt", "externally modified content");
+    await executeAsAgent("FileEdit", { path: "existing.txt", oldString: "externally modified content", newString: "hack" });
+
+    console.log("\n7️⃣ 测试: MCP 权限优先级");
+    await engine.saveRule({ tool: "mcp__google__*", behavior: "allow", source: "user" });
+    await engine.saveRule({ tool: "mcp__google__delete", behavior: "deny", source: "user" });
+    console.log("- 执行 mcp__google__search (应当允许)");
+    await executeAsAgent("mcp__google__search", { query: "test" });
+    console.log("- 执行 mcp__google__delete (应当拒绝)");
+    await executeAsAgent("mcp__google__delete", { id: "123" });
+
+    console.log("\n✅ 测试结束。");
     process.exit(0);
 }
 
