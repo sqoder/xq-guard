@@ -166,4 +166,11 @@ describe("xq-guard gateway", () => {
     expect(result.decision.behavior).toBe("deny")
     expect(result.decision.reason).toBe("Auto-deny in non-interactive mode")
   })
+
+  test("rejects non-object input", async () => {
+    const { gateway } = setup()
+    const result = await gateway.execute("FileRead", null)
+    expect(result.decision.behavior).toBe("deny")
+    expect(result.decision.reason).toContain("Input must be an object")
+  })
 })
