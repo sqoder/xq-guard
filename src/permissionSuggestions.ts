@@ -28,15 +28,9 @@ function urlValue(input: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined
 }
 
-function registrableDomain(hostname: string): string {
-  const parts = hostname.toLowerCase().split(".").filter(Boolean)
-  if (parts.length <= 2) return parts.join(".")
-  return parts.slice(-2).join(".")
-}
-
 function domainFromUrl(url: string): string | undefined {
   try {
-    return registrableDomain(new URL(url).hostname)
+    return new URL(url).hostname.toLowerCase()
   } catch {
     return undefined
   }
@@ -53,8 +47,12 @@ function bashPrefixPattern(cmd: string): string | undefined {
   const subcommand = words[1]
 
   if (["npm", "pnpm", "yarn", "bun"].includes(executable)) {
-    if (subcommand === "run") return `${executable} run:*`
-    if (subcommand) return `${executable}:*`
+    if (subcommand === "run") {
+      const scriptName = words[2]
+      if (scriptName) return `${executable} run ${scriptName}*`
+      return `${executable} run*`
+    }
+    if (subcommand) return `${executable} ${subcommand}*`
     return `${executable}*`
   }
 

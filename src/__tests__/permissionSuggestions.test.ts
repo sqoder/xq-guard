@@ -29,7 +29,19 @@ describe("permission suggestions", () => {
     })
 
     expect(suggestions.find(s => s.id === "allow_command_prefix")?.rule).toMatchObject({
-      tool: "Bash(npm run:*)",
+      tool: "Bash(npm run test:unit*)",
+      behavior: "allow",
+      source: "user",
+    })
+  })
+
+  test("suggests narrow npm command prefixes instead of npm:*", () => {
+    const suggestions = buildPermissionSuggestions("Bash", {
+      cmd: "npm install",
+    })
+
+    expect(suggestions.find(s => s.id === "allow_command_prefix")?.rule).toMatchObject({
+      tool: "Bash(npm install*)",
       behavior: "allow",
       source: "user",
     })
@@ -41,7 +53,19 @@ describe("permission suggestions", () => {
     })
 
     expect(suggestions.find(s => s.id === "allow_domain")?.rule).toMatchObject({
-      tool: "WebFetch(domain:github.com)",
+      tool: "WebFetch(domain:api.github.com)",
+      behavior: "allow",
+      source: "user",
+    })
+  })
+
+  test("uses full hostname for multi-part TLDs", () => {
+    const suggestions = buildPermissionSuggestions("WebFetch", {
+      url: "https://docs.example.co.uk/path",
+    })
+
+    expect(suggestions.find(s => s.id === "allow_domain")?.rule).toMatchObject({
+      tool: "WebFetch(domain:docs.example.co.uk)",
       behavior: "allow",
       source: "user",
     })

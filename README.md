@@ -51,12 +51,13 @@ bun start
 ## 🔒 Security Features
 
 - **ReadOnly Mode**: Switch the global context to `readOnly` to automatically allow safe operations (like `ls` or `cat`) while still blocking destructive ones.
-- **Bypass Mode**: For internal/trusted environments, the permission layer can be fully bypassed.
+- **Bypass Mode**: Skips policy-rule matching but does not skip physical safety checks such as path escape and sensitive-file protections.
 - **Tool Pattern Rules**: Allow or deny stable permission targets with `Tool(pattern)` rules while preserving legacy Regex patterns.
 - **WebFetch Domain Rules**: Grant network access by domain with rules like `WebFetch(domain:docs.example.com)`.
 - **Sensitive Path Protection**: Blocks common agent, shell, Git, SSH, editor, and package-manager configuration paths before policy rules are evaluated.
 - **Permission Suggestions**: Ask prompts can suggest one-time choices plus durable rules for exact file paths, Bash prefixes, WebFetch domains, and MCP servers.
 - **Bash Compound Handling**: Simple read-only compound commands such as `git status && pwd` can pass read-only classification, while mutating segments still require confirmation.
+- **Bash Runtime Guardrails**: `Bash` execution supports `timeoutMs`, uses a minimal allowlisted environment, and truncates oversized command output.
 - **Layered Settings**: Rules can be loaded from user, project, local, session, and CLI-argument sources while preserving legacy `rules.json` compatibility.
 
 ---

@@ -15,6 +15,24 @@ function isObjectInput(input: unknown): input is Record<string, unknown> {
   return typeof input === "object" && input !== null && !Array.isArray(input)
 }
 
+const BASH_DEFAULT_TIMEOUT_MS = 30_000
+const BASH_MAX_TIMEOUT_MS = 120_000
+const BASH_MAX_OUTPUT_CHARS = 1_000_000
+const BASH_ALLOWED_ENV_KEYS = [
+  "HOME",
+  "LANG",
+  "LC_ALL",
+  "LC_CTYPE",
+  "LOGNAME",
+  "PATH",
+  "SHELL",
+  "TERM",
+  "TMPDIR",
+  "TZ",
+  "USER",
+]
+const BASH_BLOCKED_ENV_PATTERN = /(token|secret|pass|password|key|credential|cookie|auth)/i
+
 export abstract class Tool {
   abstract name: string
   abstract validate(input: any): { ok: boolean; msg?: string }
@@ -176,6 +194,14 @@ export class BashTool extends Tool {
     if (typeof input.cmd !== "string" || input.cmd.length === 0) {
       return { ok: false, msg: "cmd must be a non-empty string" }
     }
+    if (
+      input.timeoutMs !== undefined &&
+      (typeof input.timeoutMs !== "number" ||
+        !Number.isFinite(input.timeoutMs) ||
+        input.timeoutMs <= 0)
+    ) {
+      return { ok: false, msg: "timeoutMs must be a positive number" }
+    }
     return { ok: true }
   }
 
@@ -186,19 +212,72 @@ export class BashTool extends Tool {
     return bashPhysicalSafetyDecision(input.cmd)
   }
 
-  async run(input: { cmd: string }, ctx: ToolContext): Promise<ToolRunResult> {
+  private buildSafeEnv(cwd: string): Record<string, string> {
+    const env: Record<string, string> = {}
+    for (const key of BASH_ALLOWED_ENV_KEYS) {
+      const value = process.env[key]
+      if (!value) continue
+      if (BASH_BLOCKED_ENV_PATTERN.test(key)) continue
+      env[key] = value
+    }
+    env.PWD = cwd
+    return env
+  }
+
+  private normalizeTimeout(timeoutMs?: number): number {
+    if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs)) {
+      return BASH_DEFAULT_TIMEOUT_MS
+    }
+    return Math.min(Math.max(Math.floor(timeoutMs), 1), BASH_MAX_TIMEOUT_MS)
+  }
+
+  private normalizeOutput(stdout: string, stderr: string): string {
+    const combined = [stdout, stderr].filter(Boolean).join("\n").trim()
+    if (combined.length <= BASH_MAX_OUTPUT_CHARS) {
+      return combined
+    }
+    return `${combined.slice(0, BASH_MAX_OUTPUT_CHARS)}\n[truncated at ${BASH_MAX_OUTPUT_CHARS} chars]`
+  }
+
+  async run(
+    input: { cmd: string; timeoutMs?: number },
+    ctx: ToolContext,
+  ): Promise<ToolRunResult> {
     try {
+      const timeoutMs = this.normalizeTimeout(input.timeoutMs)
       const proc = Bun.spawn(["bash", "-lc", input.cmd], {
         cwd: ctx.cwd,
+        env: this.buildSafeEnv(ctx.cwd),
         stdout: "pipe",
         stderr: "pipe",
       })
-      const [stdout, stderr, exitCode] = await Promise.all([
-        new Response(proc.stdout).text(),
-        new Response(proc.stderr).text(),
-        proc.exited,
-      ])
-      const output = [stdout, stderr].filter(Boolean).join("\n").trim()
+      let timedOut = false
+      const timer = setTimeout(() => {
+        timedOut = true
+        proc.kill()
+      }, timeoutMs)
+
+      let stdout = ""
+      let stderr = ""
+      let exitCode = 0
+      try {
+        ;[stdout, stderr, exitCode] = await Promise.all([
+          new Response(proc.stdout).text(),
+          new Response(proc.stderr).text(),
+          proc.exited,
+        ])
+      } finally {
+        clearTimeout(timer)
+      }
+
+      const output = this.normalizeOutput(stdout, stderr)
+      if (timedOut) {
+        return {
+          ok: false,
+          output: output || "(No output)",
+          error: `Command timed out after ${timeoutMs}ms`,
+        }
+      }
       if (exitCode !== 0) {
         return { 
             ok: false, 
