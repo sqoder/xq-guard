@@ -220,8 +220,10 @@ describe("xq-guard gateway", () => {
     expect(
       result.decision.suggestions?.find(s => s.id === "allow_path")?.rule,
     ).toMatchObject({
-      tool: "FileRead(src/app.ts)",
+      toolName: "Read",
+      ruleContent: "src/app.ts",
       behavior: "allow",
+      source: "userSettings",
     })
   })
 

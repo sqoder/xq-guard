@@ -17,9 +17,10 @@ describe("permission suggestions", () => {
       "deny_path",
     ])
     expect(suggestions.find(s => s.id === "allow_path")?.rule).toMatchObject({
-      tool: "FileEdit(src/app.ts)",
+      toolName: "Edit",
+      ruleContent: "src/app.ts",
       behavior: "allow",
-      source: "user",
+      source: "userSettings",
     })
   })
 
@@ -29,9 +30,10 @@ describe("permission suggestions", () => {
     })
 
     expect(suggestions.find(s => s.id === "allow_command_prefix")?.rule).toMatchObject({
-      tool: "Bash(npm run test:unit*)",
+      toolName: "Bash",
+      ruleContent: "npm run test:unit*",
       behavior: "allow",
-      source: "user",
+      source: "userSettings",
     })
   })
 
@@ -41,9 +43,10 @@ describe("permission suggestions", () => {
     })
 
     expect(suggestions.find(s => s.id === "allow_command_prefix")?.rule).toMatchObject({
-      tool: "Bash(npm install*)",
+      toolName: "Bash",
+      ruleContent: "npm install*",
       behavior: "allow",
-      source: "user",
+      source: "userSettings",
     })
   })
 
@@ -53,9 +56,10 @@ describe("permission suggestions", () => {
     })
 
     expect(suggestions.find(s => s.id === "allow_domain")?.rule).toMatchObject({
-      tool: "WebFetch(domain:api.github.com)",
+      toolName: "WebFetch",
+      ruleContent: "domain:api.github.com",
       behavior: "allow",
-      source: "user",
+      source: "userSettings",
     })
   })
 
@@ -65,9 +69,10 @@ describe("permission suggestions", () => {
     })
 
     expect(suggestions.find(s => s.id === "allow_domain")?.rule).toMatchObject({
-      tool: "WebFetch(domain:docs.example.co.uk)",
+      toolName: "WebFetch",
+      ruleContent: "domain:docs.example.co.uk",
       behavior: "allow",
-      source: "user",
+      source: "userSettings",
     })
   })
 
@@ -77,9 +82,9 @@ describe("permission suggestions", () => {
     })
 
     expect(suggestions.find(s => s.id === "allow_mcp_server")?.rule).toMatchObject({
-      tool: "mcp__github__*",
+      toolName: "mcp__github__*",
       behavior: "allow",
-      source: "user",
+      source: "userSettings",
     })
   })
 })

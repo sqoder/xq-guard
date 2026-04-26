@@ -1,9 +1,13 @@
-import { PermissionRule, PermissionDecision, ToolContext } from "./types"
+import {
+  PermissionRule,
+  PermissionRuleInput,
+  PermissionDecision,
+  ToolContext,
+} from "./types"
 import { resolve, isAbsolute, normalize } from "path"
 import { statSync, existsSync, realpathSync, readFileSync } from "fs"
 import { createHash } from "crypto"
-import { ruleMatchesToolCall, isWriteOperation } from "./ruleMatcher"
-import { assessBashCommand } from "./bashPermissions"
+import { hasPermissionsToUseTool } from "./permissions/hasPermissionsToUseTool"
 import {
   PermissionSettingsOptions,
   PermissionSettingsStore,
@@ -39,8 +43,8 @@ export class PermissionEngine {
     this.settingsStore = new PermissionSettingsStore(baseDir, settings)
   }
 
-  async saveRule(rule: Omit<PermissionRule, "id">) {
-    await this.settingsStore.saveRule(rule)
+  async saveRule(rule: PermissionRuleInput | PermissionRule) {
+    return this.settingsStore.saveRule(rule)
   }
 
   private canonicalPath(path: string, ctx: ToolContext): string {
@@ -123,110 +127,11 @@ export class PermissionEngine {
     ).catch(console.error)
   }
 
-  private isPlanningReadOperation(toolName: string, input: string): boolean {
-    if (toolName === "FileRead") {
-      return true
-    }
-
-    if (toolName === "Bash") {
-      try {
-        const parsed = JSON.parse(input)
-        if (typeof parsed?.cmd !== "string") {
-          return false
-        }
-        const assessment = assessBashCommand(parsed.cmd)
-        return assessment.isReadOnly && !assessment.requiresAsk
-      } catch {
-        return false
-      }
-    }
-
-    return false
-  }
-
   async decide(
     toolName: string,
     input: string,
     ctx: ToolContext,
   ): Promise<PermissionDecision> {
-    if (ctx.mode === "bypass") {
-      return { behavior: "allow", reason: "Bypass mode" }
-    }
-
-    const matchingRules = this.settingsStore.getRules().filter(rule =>
-      ruleMatchesToolCall(rule, toolName, input, ctx),
-    )
-
-    if (matchingRules.length > 0) {
-      if (matchingRules.some(r => r.behavior === "deny")) {
-        return { behavior: "deny", reason: "Matched a deny rule" }
-      }
-      if (
-        (ctx.mode === "readOnly" || ctx.mode === "plan") &&
-        isWriteOperation(toolName, input)
-      ) {
-        return {
-          behavior: "deny",
-          reason:
-            ctx.mode === "plan"
-              ? "Write operation forbidden in Plan mode"
-              : "Write operation forbidden in ReadOnly mode",
-        }
-      }
-      if (matchingRules.some(r => r.behavior === "ask")) {
-        if (ctx.mode === "dontAsk" || ctx.mode === "plan") {
-          return {
-            behavior: "deny",
-            reason:
-              ctx.mode === "plan"
-                ? "Plan mode does not prompt for ask rules"
-                : "dontAsk mode does not prompt for ask rules",
-          }
-        }
-        return { behavior: "ask", reason: "Matched an ask rule" }
-      }
-      return { behavior: "allow", reason: "Matched allow rule(s)" }
-    }
-
-    if (ctx.mode === "readOnly") {
-      if (isWriteOperation(toolName, input)) {
-        return {
-          behavior: "deny",
-          reason: "Write operation forbidden in ReadOnly mode",
-        }
-      }
-      return { behavior: "allow", reason: "ReadOnly mode" }
-    }
-
-    if (ctx.mode === "plan") {
-      if (isWriteOperation(toolName, input)) {
-        return {
-          behavior: "deny",
-          reason: "Write operation forbidden in Plan mode",
-        }
-      }
-      if (this.isPlanningReadOperation(toolName, input)) {
-        return { behavior: "allow", reason: "Plan mode read operation" }
-      }
-      return {
-        behavior: "deny",
-        reason: "Plan mode requires an explicit rule for this tool",
-      }
-    }
-
-    if (ctx.mode === "dontAsk") {
-      return {
-        behavior: "deny",
-        reason: "dontAsk mode does not prompt for new permissions",
-      }
-    }
-
-    if (ctx.mode === "acceptEdits") {
-      if (toolName === "FileWrite" || toolName === "FileEdit") {
-        return { behavior: "allow", reason: "AcceptEdits mode allows file edits" }
-      }
-    }
-
-    return { behavior: "ask", reason: "No matching rule found" }
+    return hasPermissionsToUseTool(toolName, input, ctx, this.settingsStore.getRules())
   }
 }

@@ -1,4 +1,14 @@
-import { PermissionSuggestion } from "./types"
+import {
+  PermissionSuggestion,
+  permissionRuleValueToString,
+} from "./types"
+
+function canonicalSuggestionToolName(toolName: string): string {
+  if (toolName === "FileRead") return "Read"
+  if (toolName === "FileEdit") return "Edit"
+  if (toolName === "FileWrite") return "Write"
+  return toolName
+}
 
 function escapeRulePattern(value: string): string {
   return value.replace(/[()]/g, "\\$&")
@@ -91,12 +101,15 @@ export function buildPermissionSuggestions(
     {
       id: "allow_tool",
       key: "a",
-      label: `always allow ${toolName}`,
+      label: `always allow ${canonicalSuggestionToolName(toolName)}`,
       behavior: "allow",
       rule: {
-        tool: toolName,
+        toolName: canonicalSuggestionToolName(toolName),
+        tool: permissionRuleValueToString({
+          toolName: canonicalSuggestionToolName(toolName),
+        }),
         behavior: "allow",
-        source: "user",
+        source: "userSettings",
       },
     },
   ]
@@ -104,27 +117,38 @@ export function buildPermissionSuggestions(
   const path = pathValue(input)
   if (path && ["FileRead", "FileWrite", "FileEdit"].includes(toolName)) {
     const escapedPath = escapeRulePattern(path)
+    const canonicalToolName = canonicalSuggestionToolName(toolName)
     suggestions.push(
       {
         id: "allow_path",
         key: "p",
-        label: `always allow ${toolName} for ${path}`,
+        label: `always allow ${canonicalToolName} for ${path}`,
         behavior: "allow",
         rule: {
-          tool: `${toolName}(${escapedPath})`,
+          toolName: canonicalToolName,
+          ruleContent: escapedPath,
+          tool: permissionRuleValueToString({
+            toolName: canonicalToolName,
+            ruleContent: escapedPath,
+          }),
           behavior: "allow",
-          source: "user",
+          source: "userSettings",
         },
       },
       {
         id: "deny_path",
         key: "d",
-        label: `always deny ${toolName} for ${path}`,
+        label: `always deny ${canonicalToolName} for ${path}`,
         behavior: "deny",
         rule: {
-          tool: `${toolName}(${escapedPath})`,
+          toolName: canonicalToolName,
+          ruleContent: escapedPath,
+          tool: permissionRuleValueToString({
+            toolName: canonicalToolName,
+            ruleContent: escapedPath,
+          }),
           behavior: "deny",
-          source: "user",
+          source: "userSettings",
         },
       },
     )
@@ -141,9 +165,14 @@ export function buildPermissionSuggestions(
         label: `always allow ${bashPattern}`,
         behavior: "allow",
         rule: {
-          tool: `Bash(${escapeRulePattern(bashPattern)})`,
+          toolName: "Bash",
+          ruleContent: escapeRulePattern(bashPattern),
+          tool: permissionRuleValueToString({
+            toolName: "Bash",
+            ruleContent: escapeRulePattern(bashPattern),
+          }),
           behavior: "allow",
-          source: "user",
+          source: "userSettings",
         },
       },
       {
@@ -152,9 +181,14 @@ export function buildPermissionSuggestions(
         label: `always deny ${bashPattern}`,
         behavior: "deny",
         rule: {
-          tool: `Bash(${escapeRulePattern(bashPattern)})`,
+          toolName: "Bash",
+          ruleContent: escapeRulePattern(bashPattern),
+          tool: permissionRuleValueToString({
+            toolName: "Bash",
+            ruleContent: escapeRulePattern(bashPattern),
+          }),
           behavior: "deny",
-          source: "user",
+          source: "userSettings",
         },
       },
     )
@@ -171,9 +205,14 @@ export function buildPermissionSuggestions(
         label: `always allow domain ${domain}`,
         behavior: "allow",
         rule: {
-          tool: `WebFetch(domain:${domain})`,
+          toolName: "WebFetch",
+          ruleContent: `domain:${domain}`,
+          tool: permissionRuleValueToString({
+            toolName: "WebFetch",
+            ruleContent: `domain:${domain}`,
+          }),
           behavior: "allow",
-          source: "user",
+          source: "userSettings",
         },
       },
       {
@@ -182,9 +221,14 @@ export function buildPermissionSuggestions(
         label: `always deny domain ${domain}`,
         behavior: "deny",
         rule: {
-          tool: `WebFetch(domain:${domain})`,
+          toolName: "WebFetch",
+          ruleContent: `domain:${domain}`,
+          tool: permissionRuleValueToString({
+            toolName: "WebFetch",
+            ruleContent: `domain:${domain}`,
+          }),
           behavior: "deny",
-          source: "user",
+          source: "userSettings",
         },
       },
     )
@@ -200,9 +244,10 @@ export function buildPermissionSuggestions(
         label: `always allow MCP server ${serverRule}`,
         behavior: "allow",
         rule: {
+          toolName: serverRule,
           tool: serverRule,
           behavior: "allow",
-          source: "user",
+          source: "userSettings",
         },
       },
       {
@@ -211,9 +256,10 @@ export function buildPermissionSuggestions(
         label: `always deny ${toolName}`,
         behavior: "deny",
         rule: {
+          toolName,
           tool: toolName,
           behavior: "deny",
-          source: "user",
+          source: "userSettings",
         },
       },
     )
@@ -226,9 +272,10 @@ export function buildPermissionSuggestions(
     label: `always deny ${toolName}`,
     behavior: "deny",
     rule: {
+      toolName,
       tool: toolName,
       behavior: "deny",
-      source: "user",
+      source: "userSettings",
     },
   })
 

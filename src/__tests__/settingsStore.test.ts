@@ -27,16 +27,36 @@ describe("settings store", () => {
     const sessionSettingsPath = join(cwd, "session-settings.json")
 
     writeRules(userSettingsPath, [
-      { id: "user-1", tool: "FileRead(user.txt)", behavior: "allow", source: "user" },
+      {
+        id: "user-1",
+        tool: "Read(user.txt)",
+        behavior: "allow",
+        source: "userSettings",
+      },
     ])
     writeRules(projectSettingsPath, [
-      { id: "project-1", tool: "FileRead(project.txt)", behavior: "allow", source: "project" },
+      {
+        id: "project-1",
+        tool: "Read(project.txt)",
+        behavior: "allow",
+        source: "projectSettings",
+      },
     ])
     writeRules(localSettingsPath, [
-      { id: "local-1", tool: "FileRead(local.txt)", behavior: "allow", source: "local" },
+      {
+        id: "local-1",
+        tool: "Read(local.txt)",
+        behavior: "allow",
+        source: "localSettings",
+      },
     ])
     writeRules(sessionSettingsPath, [
-      { id: "session-1", tool: "FileRead(session.txt)", behavior: "allow", source: "session" },
+      {
+        id: "session-1",
+        tool: "Read(session.txt)",
+        behavior: "allow",
+        source: "session",
+      },
     ])
 
     const engine = new PermissionEngine({
@@ -47,7 +67,7 @@ describe("settings store", () => {
         localSettingsPath,
         sessionSettingsPath,
         cliArgRules: [
-          { tool: "FileRead(cli.txt)", behavior: "allow", source: "cliArg" },
+          { tool: "Read(cli.txt)", behavior: "allow", source: "cliArg" },
         ],
       },
     })
@@ -68,10 +88,20 @@ describe("settings store", () => {
     const projectSettingsPath = join(cwd, "project-settings.json")
 
     writeRules(userSettingsPath, [
-      { id: "user-1", tool: "Bash(git status*)", behavior: "allow", source: "user" },
+      {
+        id: "user-1",
+        tool: "Bash(git status*)",
+        behavior: "allow",
+        source: "userSettings",
+      },
     ])
     writeRules(projectSettingsPath, [
-      { id: "project-1", tool: "Bash(git status --short)", behavior: "deny", source: "project" },
+      {
+        id: "project-1",
+        tool: "Bash(git status --short)",
+        behavior: "deny",
+        source: "projectSettings",
+      },
     ])
 
     const engine = new PermissionEngine({
@@ -98,23 +128,33 @@ describe("settings store", () => {
     })
 
     await engine.saveRule({
-      tool: "FileRead(user.txt)",
+      tool: "Read(user.txt)",
       behavior: "allow",
-      source: "user",
+      source: "userSettings",
     })
     await engine.saveRule({
-      tool: "FileRead(local.txt)",
+      tool: "Read(local.txt)",
       behavior: "deny",
-      source: "local",
+      source: "localSettings",
     })
 
     expect(existsSync(userSettingsPath)).toBe(true)
     expect(existsSync(localSettingsPath)).toBe(true)
     expect(readRules(userSettingsPath)).toMatchObject([
-      { tool: "FileRead(user.txt)", behavior: "allow", source: "user" },
+      {
+        toolName: "Read",
+        ruleContent: "user.txt",
+        behavior: "allow",
+        source: "userSettings",
+      },
     ])
     expect(readRules(localSettingsPath)).toMatchObject([
-      { tool: "FileRead(local.txt)", behavior: "deny", source: "local" },
+      {
+        toolName: "Read",
+        ruleContent: "local.txt",
+        behavior: "deny",
+        source: "localSettings",
+      },
     ])
   })
 
@@ -126,12 +166,17 @@ describe("settings store", () => {
     await engine.saveRule({
       tool: "WebFetch(domain:example.com)",
       behavior: "allow",
-      source: "user",
+      source: "userSettings",
     })
 
     expect(existsSync(legacyPath)).toBe(true)
     expect(readRules(legacyPath)).toMatchObject([
-      { tool: "WebFetch(domain:example.com)", behavior: "allow", source: "user" },
+      {
+        toolName: "WebFetch",
+        ruleContent: "domain:example.com",
+        behavior: "allow",
+        source: "userSettings",
+      },
     ])
   })
 })
