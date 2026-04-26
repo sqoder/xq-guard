@@ -2,6 +2,7 @@ import { PermissionEngine } from "./engine";
 import { Tool } from "./tools";
 import { ToolContext, PermissionDecision, GatewayExecuteResult } from "./types";
 import { buildPermissionSuggestions } from "./permissionSuggestions";
+import { permissionUpdateFromRule } from "./permissions/permissionUpdate";
 import { ToolRegistry, createDefaultToolRegistry } from "./toolRegistry";
 
 export interface GatewayOptions {
@@ -48,22 +49,22 @@ export class PermissionGateway {
       return { decision };
     }
 
-    const safety = await tool.checkPhysicalSafety(input, this.ctx);
-    if (safety?.behavior === "deny") {
+    const toolDecision = await this.evaluateToolPermissions(tool, input);
+    if (toolDecision?.behavior === "deny") {
       this.engine.logAudit({
         toolName,
         input: JSON.stringify(input),
-        decision: safety,
+        decision: toolDecision,
         time: new Date().toISOString(),
       });
-      return { decision: safety };
+      return { decision: toolDecision };
     }
 
     let decision = await this.engine.decide(toolName, JSON.stringify(input), this.ctx);
-    if (safety?.behavior === "ask" && decision.behavior !== "deny") {
+    if (toolDecision?.behavior === "ask" && decision.behavior !== "deny") {
       decision = {
         behavior: "ask",
-        reason: safety.reason,
+        reason: toolDecision.reason,
       };
     }
 
@@ -124,6 +125,39 @@ export class PermissionGateway {
     return { decision, result };
   }
 
+  private async evaluateToolPermissions(
+    tool: Tool,
+    input: any,
+  ): Promise<PermissionDecision | null> {
+    const candidate = tool as Tool & {
+      checkPermissions?: (
+        input: any,
+        ctx: ToolContext,
+      ) => Promise<PermissionDecision | null> | PermissionDecision | null
+      checkPhysicalSafety?: (
+        input: any,
+        ctx: ToolContext,
+      ) => Promise<PermissionDecision | null> | PermissionDecision | null
+    }
+
+    const hasCustomCheckPermissions =
+      typeof candidate.checkPermissions === "function" &&
+      candidate.checkPermissions !== Tool.prototype.checkPermissions
+    const hasCustomCheckPhysicalSafety =
+      typeof candidate.checkPhysicalSafety === "function" &&
+      candidate.checkPhysicalSafety !== Tool.prototype.checkPhysicalSafety
+
+    if (hasCustomCheckPermissions) {
+      return await candidate.checkPermissions(input, this.ctx)
+    }
+
+    if (hasCustomCheckPhysicalSafety) {
+      return await candidate.checkPhysicalSafety(input, this.ctx)
+    }
+
+    return null
+  }
+
   private async handleAsk(
     toolName: string,
     input: any,
@@ -158,8 +192,15 @@ export class PermissionGateway {
           });
           return;
         }
+        let updates: PermissionDecision["updates"]
+        let metadata: PermissionDecision["metadata"]
         if (suggestion.rule) {
-          await this.engine.saveRule(suggestion.rule);
+          const savedRule = await this.engine.saveRule(suggestion.rule);
+          updates = [permissionUpdateFromRule(savedRule)];
+          metadata = {
+            savedRuleId: savedRule.id,
+            savedRuleSource: savedRule.source,
+          };
         }
         resolve({
           behavior: suggestion.behavior,
@@ -169,6 +210,8 @@ export class PermissionGateway {
               ? "User approved once"
               : "User rejected",
           suggestions,
+          updates,
+          metadata,
         });
       });
     });

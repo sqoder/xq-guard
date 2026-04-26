@@ -1,3 +1,5 @@
+import type { PermissionUpdate } from "./permissionUpdate"
+
 export type PermissionBehavior = "allow" | "ask" | "deny" | "passthrough"
 
 export type PermissionMode =
@@ -54,10 +56,30 @@ export interface PermissionSuggestion {
   rule?: PermissionRuleInput
 }
 
-export interface PermissionDecision {
-  behavior: "allow" | "deny" | "ask"
+export interface PermissionResultMetadata {
+  toolName?: string
+  ruleId?: string
+  mode?: PermissionMode
+  source?: PermissionRuleSource
+  classifierName?: string
+  classifierConfidence?: number
+  classifierReason?: string
+  [key: string]: unknown
+}
+
+export interface PermissionResult {
+  behavior: PermissionBehavior
   reason: string
   suggestions?: PermissionSuggestion[]
+  updates?: PermissionUpdate[]
+  updatedInput?: unknown
+  blockedPath?: string
+  pendingClassifierCheck?: boolean
+  metadata?: PermissionResultMetadata
+}
+
+export type PermissionDecision = PermissionResult & {
+  behavior: "allow" | "deny" | "ask"
 }
 
 export interface ToolRunResult {

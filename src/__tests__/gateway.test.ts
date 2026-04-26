@@ -5,12 +5,14 @@ import { join } from "path"
 import { PermissionEngine } from "../engine"
 import { createGateway } from "../gateway"
 
-function mockTool(name: string, output: string) {
+function mockTool(name: string, output: string, overrides: Record<string, any> = {}) {
   return {
     name,
     validate: () => ({ ok: true }),
+    checkPermissions: async () => null,
     checkPhysicalSafety: async () => null,
     run: async () => ({ ok: true, output }),
+    ...overrides,
   } as any
 }
 
@@ -318,6 +320,39 @@ describe("xq-guard gateway", () => {
       id: "123",
     })
     expect(result.decision.behavior).toBe("deny")
+  })
+
+  test("tool-level permission checks still apply in bypass mode", async () => {
+    const { cwd, engine } = setup()
+    const gateway = createGateway({
+      engine,
+      ctx: {
+        mode: "bypassPermissions",
+        cwd,
+        allowedPaths: [cwd],
+        interactive: false,
+      },
+      tools: {
+        "mcp__google__delete": mockTool("mcp__google__delete", "deleted", {
+          checkPermissions: async () => ({
+            behavior: "deny",
+            reason: "tool-level deny",
+          }),
+        }),
+      },
+    })
+    await engine.saveRule({
+      tool: "mcp__google__delete",
+      behavior: "allow",
+      source: "user",
+    })
+
+    const result = await gateway.execute("mcp__google__delete", {
+      id: "123",
+    })
+
+    expect(result.decision.behavior).toBe("deny")
+    expect(result.decision.reason).toBe("tool-level deny")
   })
 
   test("executes registered MCP tools when allow rules match", async () => {

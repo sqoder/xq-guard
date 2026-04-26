@@ -41,13 +41,13 @@ async function runDemo() {
         "mcp__google__search": {
           name: "mcp__google__search",
           validate: () => ({ ok: true }),
-          checkPhysicalSafety: async () => null,
+          checkPermissions: async () => null,
           run: async () => ({ ok: true, output: "demo search result" }),
         } as any,
         "mcp__google__delete": {
           name: "mcp__google__delete",
           validate: () => ({ ok: true }),
-          checkPhysicalSafety: async () => null,
+          checkPermissions: async () => null,
           run: async () => ({ ok: true, output: "demo delete result" }),
         } as any,
       },

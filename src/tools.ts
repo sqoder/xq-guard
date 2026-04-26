@@ -61,12 +61,20 @@ export abstract class Tool {
   abstract name: string
   abstract validate(input: any): { ok: boolean; msg?: string }
 
-  // 工具自带的硬性物理检查（如路径穿越检测）
-  async checkPhysicalSafety(
+  // 新的主权限入口。默认不附加工具级约束。
+  async checkPermissions(
     input: any,
     ctx: ToolContext,
   ): Promise<PermissionDecision | null> {
     return null
+  }
+
+  // 旧的物理安全钩子，保留给老实现和直接调用方做兼容。
+  async checkPhysicalSafety(
+    input: any,
+    ctx: ToolContext,
+  ): Promise<PermissionDecision | null> {
+    return this.checkPermissions(input, ctx)
   }
 
   protected resolveThroughExistingParent(targetPath: string): string {
@@ -186,7 +194,7 @@ export class FileReadTool extends Tool {
     return { ok: true }
   }
 
-  async checkPhysicalSafety(
+  async checkPermissions(
     input: { path: string },
     ctx: ToolContext,
   ): Promise<PermissionDecision | null> {
@@ -229,7 +237,7 @@ export class BashTool extends Tool {
     return { ok: true }
   }
 
-  async checkPhysicalSafety(
+  async checkPermissions(
     input: { cmd: string },
     ctx: ToolContext,
   ): Promise<PermissionDecision | null> {
@@ -450,6 +458,13 @@ export class WebFetchTool extends Tool {
     return { ok: true }
   }
 
+  async checkPermissions(
+    _input: { url: string },
+    _ctx: ToolContext,
+  ): Promise<PermissionDecision | null> {
+    return null
+  }
+
   async run(input: { url: string }): Promise<ToolRunResult> {
     try {
       const response = await fetch(input.url)
@@ -486,7 +501,7 @@ export class FileWriteTool extends Tool {
     return { ok: true }
   }
 
-  async checkPhysicalSafety(
+  async checkPermissions(
     input: { path: string },
     ctx: ToolContext,
   ): Promise<PermissionDecision | null> {
@@ -524,7 +539,7 @@ export class FileEditTool extends Tool {
     return { ok: true }
   }
 
-  async checkPhysicalSafety(
+  async checkPermissions(
     input: { path: string },
     ctx: ToolContext,
   ): Promise<PermissionDecision | null> {

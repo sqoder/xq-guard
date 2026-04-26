@@ -22,6 +22,33 @@ function createGatewayFor(cwd: string, engine: PermissionEngine) {
 }
 
 describe("permission core", () => {
+  test("bypassPermissions still honors explicit deny rules", async () => {
+    const cwd = createTempWorkspace()
+    const engine = new PermissionEngine(cwd)
+    const gateway = createGateway({
+      engine,
+      ctx: {
+        mode: "bypassPermissions",
+        cwd,
+        allowedPaths: [cwd],
+        interactive: false,
+      },
+    })
+
+    await engine.saveRule({
+      tool: "FileRead",
+      behavior: "deny",
+      source: "userSettings",
+    })
+
+    const result = await gateway.execute("FileRead", {
+      path: "src/app.ts",
+    })
+
+    expect(result.decision.behavior).toBe("deny")
+    expect(result.decision.reason).toContain("deny rule")
+  })
+
   test("matches Read and Edit aliases for file tools", async () => {
     const cwd = createTempWorkspace()
     const engine = new PermissionEngine(cwd)
