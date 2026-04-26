@@ -4,6 +4,7 @@ import { tmpdir } from "os"
 import { join } from "path"
 import { PermissionEngine } from "../engine"
 import { createGateway } from "../gateway"
+import { PermissionGatewayEvent } from "../types"
 
 function mockTool(name: string, output: string, overrides: Record<string, any> = {}) {
   return {
@@ -229,6 +230,101 @@ describe("xq-guard gateway", () => {
     })
   })
 
+  test("emits permission request/response events and persists suggestion rules", async () => {
+    const { cwd } = setup()
+    const events: PermissionGatewayEvent[] = []
+    writeFileSync(join(cwd, "notes.txt"), "hello")
+
+    // Use a dedicated engine so persisted rule behavior is deterministic.
+    const dedicatedEngine = new PermissionEngine(cwd)
+    const dedicatedGateway = createGateway({
+      engine: dedicatedEngine,
+      ctx: {
+        mode: "default",
+        cwd,
+        allowedPaths: [cwd],
+        interactive: false,
+      },
+      permissionRequestHandler: async () => ({
+        decision: "allow",
+        suggestionKey: "a",
+      }),
+      onPermissionEvent: event => {
+        events.push(event)
+      },
+    })
+
+    const first = await dedicatedGateway.execute("FileRead", {
+      path: "notes.txt",
+    })
+    const second = await dedicatedGateway.execute("FileRead", {
+      path: "notes.txt",
+    })
+
+    expect(first.decision.behavior).toBe("allow")
+    expect(first.decision.metadata?.savedRuleId).toBeDefined()
+    expect(second.decision.behavior).toBe("allow")
+    expect(second.decision.reason).toContain("allow")
+    expect(
+      events.filter(event => event.type === "permission.requested").length,
+    ).toBe(1)
+    expect(
+      events.filter(event => event.type === "permission.responded").length,
+    ).toBe(1)
+  })
+
+  test("emits events when non-interactive ask is auto-denied", async () => {
+    const { engine, cwd } = setup()
+    const events: PermissionGatewayEvent[] = []
+    const eventGateway = createGateway({
+      engine,
+      ctx: {
+        mode: "default",
+        cwd,
+        allowedPaths: [cwd],
+        interactive: false,
+      },
+      onPermissionEvent: event => {
+        events.push(event)
+      },
+    })
+
+    const result = await eventGateway.execute("FileRead", {
+      path: "missing.txt",
+    })
+
+    expect(result.decision.behavior).toBe("deny")
+    expect(result.decision.reason).toBe("Auto-deny in non-interactive mode")
+    expect(events.map(event => event.type)).toEqual([
+      "permission.requested",
+      "permission.responded",
+    ])
+  })
+
+  test("supports headless permission responders in non-interactive mode", async () => {
+    const { engine, cwd } = setup()
+    writeFileSync(join(cwd, "headless.txt"), "ok")
+    const headlessGateway = createGateway({
+      engine,
+      ctx: {
+        mode: "default",
+        cwd,
+        allowedPaths: [cwd],
+        interactive: false,
+      },
+      permissionRequestHandler: async () => ({
+        decision: "allow",
+      }),
+    })
+
+    const result = await headlessGateway.execute("FileRead", {
+      path: "headless.txt",
+    })
+
+    expect(result.decision.behavior).toBe("allow")
+    expect(result.result?.ok).toBe(true)
+  })
+
   test("registers WebFetch as a built-in tool with URL validation", async () => {
     const { gateway, engine } = setup()
     await engine.saveRule({
@@ -355,6 +451,32 @@ describe("xq-guard gateway", () => {
     expect(result.decision.reason).toBe("tool-level deny")
   })
 
+  test("bypassPermissions does not skip explicit ask rules", async () => {
+    const { cwd, engine } = setup()
+    const gateway = createGateway({
+      engine,
+      ctx: {
+        mode: "bypassPermissions",
+        cwd,
+        allowedPaths: [cwd],
+        interactive: false,
+      },
+    })
+    await engine.saveRule({
+      tool: "FileRead",
+      behavior: "ask",
+      source: "user",
+    })
+
+    const result = await gateway.execute("FileRead", {
+      path: "src/app.ts",
+    })
+
+    expect(result.decision.behavior).toBe("deny")
+    expect(result.decision.reason).toBe("Auto-deny in non-interactive mode")
+    expect(result.decision.suggestions?.length).toBeGreaterThan(0)
+  })
+
   test("executes registered MCP tools when allow rules match", async () => {
     const { gateway, engine } = setup({
       "mcp__google__search": mockTool("mcp__google__search", "search result"),
@@ -372,6 +494,91 @@ describe("xq-guard gateway", () => {
     expect(result.decision.behavior).toBe("allow")
     expect(result.result?.ok).toBe(true)
     expect(result.result?.output).toBe("search result")
+  })
+
+  test("loads MCP tools from client manager and executes them", async () => {
+    const { cwd, engine } = setup()
+    const listCalls: string[] = []
+    const callCalls: string[] = []
+    const gateway = createGateway({
+      engine,
+      ctx: {
+        mode: "default",
+        cwd,
+        allowedPaths: [cwd],
+        interactive: false,
+      },
+      mcp: {
+        clientManager: {
+          async listTools(serverName: string) {
+            listCalls.push(serverName)
+            return [
+              {
+                name: "search",
+                openWorld: true,
+                readOnly: true,
+              },
+            ]
+          },
+          async callTool(serverName: string, toolName: string, input: unknown) {
+            callCalls.push(`${serverName}:${toolName}:${JSON.stringify(input)}`)
+            return "live mcp result"
+          },
+        },
+      },
+    })
+    await engine.saveRule({
+      tool: "mcp__google__*",
+      behavior: "allow",
+      source: "user",
+    })
+
+    const result = await gateway.execute("mcp__google__search", {
+      query: "xq-guard",
+    })
+
+    expect(result.decision.behavior).toBe("allow")
+    expect(result.result?.ok).toBe(true)
+    expect(result.result?.output).toBe("live mcp result")
+    expect(listCalls).toEqual(["google"])
+    expect(callCalls).toEqual([
+      'google:search:{"query":"xq-guard"}',
+    ])
+  })
+
+  test("denies MCP execution when client manager fails to load tools", async () => {
+    const { cwd, engine } = setup()
+    const gateway = createGateway({
+      engine,
+      ctx: {
+        mode: "default",
+        cwd,
+        allowedPaths: [cwd],
+        interactive: false,
+      },
+      mcp: {
+        clientManager: {
+          async listTools() {
+            throw new Error("server unavailable")
+          },
+          async callTool() {
+            return "should-not-run"
+          },
+        },
+      },
+    })
+    await engine.saveRule({
+      tool: "mcp__google__*",
+      behavior: "allow",
+      source: "user",
+    })
+
+    const result = await gateway.execute("mcp__google__search", {
+      query: "xq-guard",
+    })
+
+    expect(result.decision.behavior).toBe("deny")
+    expect(result.decision.reason).toContain("MCP tool resolution failed")
   })
 
   test("blocks write in readOnly mode even if allow rule exists", async () => {

@@ -1,4 +1,5 @@
 import { isAbsolute, relative } from "path"
+import { bashPatternMatches } from "../bash/ruleMatcher"
 import { PermissionRule, ToolContext } from "./types"
 import { normalizePermissionRule } from "./permissionRuleParser"
 import { isBashWriteOperation } from "../bashPermissions"
@@ -64,24 +65,6 @@ function domainMatches(ruleDomain: string, urlValue: string): boolean {
   } catch {
     return false
   }
-}
-
-function bashPatternMatches(pattern: string, cmd: string): boolean {
-  const normalizedPattern = pattern.trim()
-  const normalizedCommand = cmd.trim()
-  const variants = new Set([
-    normalizedPattern,
-    normalizedPattern.replace(/:\*$/u, " *"),
-  ])
-  return [...variants].some(variant => {
-    if (variant.includes("*") || variant.includes("?")) {
-      return globToRegExp(variant).test(normalizedCommand)
-    }
-    return (
-      normalizedCommand === variant ||
-      normalizedCommand.startsWith(`${variant} `)
-    )
-  })
 }
 
 function pathCandidates(path: string, ctx: ToolContext): string[] {

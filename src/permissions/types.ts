@@ -56,6 +56,45 @@ export interface PermissionSuggestion {
   rule?: PermissionRuleInput
 }
 
+export interface PermissionRequestedEvent {
+  type: "permission.requested"
+  requestId: string
+  toolName: string
+  input: unknown
+  reason: string
+  suggestions: PermissionSuggestion[]
+  mode: PermissionMode
+  cwd: string
+}
+
+export interface PermissionRespondedEvent {
+  type: "permission.responded"
+  requestId: string
+  toolName: string
+  input: unknown
+  decision: "allow" | "deny"
+  reason: string
+  suggestionKey?: string
+  suggestionId?: string
+  updates?: PermissionUpdate[]
+  metadata?: PermissionResultMetadata
+}
+
+export type PermissionGatewayEvent =
+  | PermissionRequestedEvent
+  | PermissionRespondedEvent
+
+export interface PermissionResponse {
+  decision: "allow" | "deny"
+  reason?: string
+  suggestionKey?: string
+  rule?: PermissionRuleInput | PermissionRule
+}
+
+export type PermissionRequestHandler = (
+  event: PermissionRequestedEvent,
+) => Promise<PermissionResponse> | PermissionResponse
+
 export interface PermissionResultMetadata {
   toolName?: string
   ruleId?: string

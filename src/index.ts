@@ -5,3 +5,5 @@ export * from "./gateway";
 export * from "./permissionSuggestions";
 export * from "./toolRegistry";
 export * from "./settingsStore";
+export * from "./permissionEvents";
+export * from "./permissions";

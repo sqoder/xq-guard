@@ -49,6 +49,81 @@ describe("permission core", () => {
     expect(result.decision.reason).toContain("deny rule")
   })
 
+  test("bypassPermissions still surfaces explicit ask rules", async () => {
+    const cwd = createTempWorkspace()
+    const engine = new PermissionEngine(cwd)
+
+    await engine.saveRule({
+      tool: "FileRead",
+      behavior: "ask",
+      source: "userSettings",
+    })
+
+    const decision = await engine.decide(
+      "FileRead",
+      JSON.stringify({ path: "src/app.ts" }),
+      {
+        mode: "bypassPermissions",
+        cwd,
+        allowedPaths: [cwd],
+        interactive: false,
+      },
+    )
+
+    expect(decision.behavior).toBe("ask")
+    expect(decision.reason).toContain("ask rule")
+  })
+
+  test("dontAsk mode denies matched ask rules instead of prompting", async () => {
+    const cwd = createTempWorkspace()
+    const engine = new PermissionEngine(cwd)
+
+    await engine.saveRule({
+      tool: "FileRead",
+      behavior: "ask",
+      source: "userSettings",
+    })
+
+    const decision = await engine.decide(
+      "FileRead",
+      JSON.stringify({ path: "src/app.ts" }),
+      {
+        mode: "dontAsk",
+        cwd,
+        allowedPaths: [cwd],
+        interactive: true,
+      },
+    )
+
+    expect(decision.behavior).toBe("deny")
+    expect(decision.reason).toContain("dontAsk mode")
+  })
+
+  test("plan mode denies matched ask rules instead of prompting", async () => {
+    const cwd = createTempWorkspace()
+    const engine = new PermissionEngine(cwd)
+
+    await engine.saveRule({
+      tool: "FileRead",
+      behavior: "ask",
+      source: "userSettings",
+    })
+
+    const decision = await engine.decide(
+      "FileRead",
+      JSON.stringify({ path: "src/app.ts" }),
+      {
+        mode: "plan",
+        cwd,
+        allowedPaths: [cwd],
+        interactive: true,
+      },
+    )
+
+    expect(decision.behavior).toBe("deny")
+    expect(decision.reason).toContain("Plan mode")
+  })
+
   test("matches Read and Edit aliases for file tools", async () => {
     const cwd = createTempWorkspace()
     const engine = new PermissionEngine(cwd)

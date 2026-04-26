@@ -53,13 +53,10 @@ export function hasPermissionsToUseTool(
   const matchingRules = rules.filter(rule =>
     ruleMatchesToolCall(rule, toolName, input, ctx),
   )
+  const askRuleMatched = matchingRules.some(rule => rule.behavior === "ask")
 
   if (matchingRules.some(rule => rule.behavior === "deny")) {
     return { behavior: "deny", reason: "Matched a deny rule" }
-  }
-
-  if (mode === "bypassPermissions") {
-    return { behavior: "allow", reason: "Bypass mode" }
   }
 
   if (matchingRules.length > 0) {
@@ -68,7 +65,7 @@ export function hasPermissionsToUseTool(
       return writeDecision
     }
 
-    if (matchingRules.some(rule => rule.behavior === "ask")) {
+    if (askRuleMatched) {
       if (mode === "dontAsk" || mode === "plan") {
         return {
           behavior: "deny",
@@ -82,6 +79,10 @@ export function hasPermissionsToUseTool(
     }
 
     return { behavior: "allow", reason: "Matched allow rule(s)" }
+  }
+
+  if (mode === "bypassPermissions") {
+    return { behavior: "allow", reason: "Bypass mode" }
   }
 
   if (mode === "readOnly") {
