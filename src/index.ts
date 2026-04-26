@@ -1,12 +1,14 @@
 import { PermissionEngine } from "./engine";
-import { FileReadTool, BashTool, Tool } from "./tools";
+import { FileReadTool, BashTool, FileWriteTool, FileEditTool, Tool } from "./tools";
 import { ToolContext } from "./types";
 import { join } from "path";
 
 const engine = new PermissionEngine(process.cwd());
 const tools: Record<string, Tool> = {
   "FileRead": new FileReadTool(),
-  "Bash": new BashTool()
+  "Bash": new BashTool(),
+  "FileWrite": new FileWriteTool(),
+  "FileEdit": new FileEditTool()
 };
 
 const ctx: ToolContext = {
@@ -16,75 +18,104 @@ const ctx: ToolContext = {
 };
 
 async function executeAsAgent(toolName: string, input: any) {
-  const tool = tools[toolName];
-  if (!tool) {
-    console.log(`❌ Tool ${toolName} not found`);
-    return;
-  }
+  const tool = tools[toolName] || { 
+      name: toolName, 
+      checkPhysicalSafety: async () => null, 
+      run: async () => "Mock Result",
+      validate: () => ({ ok: true })
+  };
 
-  // 1. 物理安全检查 (沙箱)
-  const safety = await tool.checkPhysicalSafety(input, ctx);
+  // 1. 物理安全检查
+  const safety = await (tool as Tool).checkPhysicalSafety?.(input, ctx);
   if (safety?.behavior === 'deny') {
-    console.error(`\x1b[31m❌ [Safety Block] ${safety.reason}\x1b[0m`);
+    console.log(`❌ [Physical Deny] ${safety.reason}`);
     return;
   }
 
-  // 2. 权限策略决策
-  let decision = await engine.decide(toolName, JSON.stringify(input), ctx);
-
-  // 3. 交互式确认
-  if (decision.behavior === 'ask') {
-    console.log(`\n🤖 Agent 想要执行 [\x1b[36m${toolName}\x1b[0m]`);
-    console.log(`📝 输入: ${JSON.stringify(input)}`);
-    console.log(`❓ 原因: ${decision.reason}`);
-    
-    // Bun.stdin 交互
-    process.stdout.write(`\n允许执行吗? \n(y)允许一次 \n(n)拒绝 \n(a)始终允许工具 \n(d)始终拒绝此内容: \n> `);
-    
-    for await (const line of console) {
-      const answer = line.trim().toLowerCase();
-      if (answer === 'y') {
-        decision = { behavior: 'allow', reason: 'User approved' };
-        break;
-      } else if (answer === 'a') {
-        await engine.saveRule({ tool: toolName, behavior: 'allow', source: 'user' });
-        decision = { behavior: 'allow', reason: 'Rule saved' };
-        break;
-      } else if (answer === 'd') {
-        const pattern = input.path || input.cmd;
-        await engine.saveRule({ tool: '*', pattern: pattern, behavior: 'deny', source: 'user' });
-        decision = { behavior: 'deny', reason: 'Permanent deny saved' };
-        break;
-      } else {
-        decision = { behavior: 'deny', reason: 'User rejected' };
-        break;
-      }
+  // 2. 写安全
+  if (toolName === 'FileWrite' || toolName === 'FileEdit') {
+    const writeSafety = engine.checkWriteSafety(input.path);
+    if (!writeSafety.ok) {
+        console.log(`❌ [Write Safety Deny] ${writeSafety.reason}`);
+        return;
     }
   }
 
-  // 4. 执行
-  if (decision.behavior === 'allow') {
-    console.log(`🚀 执行中...`);
-    const result = await tool.run(input);
-    console.log(`\x1b[32m✅ 结果:\x1b[0m\n${result}`);
-  } else {
-    console.log(`\x1b[31m🚫 拦截: ${decision.reason}\x1b[0m`);
+  // 3. 策略决策
+  let decision = await engine.decide(toolName, JSON.stringify(input), ctx);
+
+  // 4. 合并物理安全建议 (如果物理安全建议 ask 且策略是 allow/ask，则取 ask)
+  if (safety?.behavior === 'ask' && decision.behavior !== 'deny') {
+      decision = { behavior: 'ask', reason: safety.reason };
   }
+
+  // 5. 处理 Ask (非交互下自动拒绝)
+  if (decision.behavior === 'ask') {
+      console.log(`❓ [Ask Requested] -> Defaulting to Deny in test mode. Reason: ${decision.reason}`);
+      decision = { behavior: 'deny', reason: 'Auto-deny in non-interactive test' };
+  }
+
+  // 5. 执行
+  if (decision.behavior === 'allow') {
+    console.log(`🚀 [Allowed] Executing ${toolName}`);
+    if (toolName === 'FileRead') {
+        engine.recordFileRead(input.path);
+    }
+  } else {
+    console.log(`🚫 [Blocked] ${decision.reason}`);
+  }
+
+  // 6. 审计日志
+  engine.logAudit({
+    toolName,
+    input: JSON.stringify(input),
+    decision,
+    time: new Date().toISOString()
+  });
 }
 
 async function runDemo() {
-    console.log("\x1b[1m--- XQ-GUARD 权限管理网关模拟 ---\x1b[0m\n");
+    console.log("\x1b[1m--- XQ-GUARD 权限管理网关增强版 (非交互测试) ---\x1b[0m\n");
 
-    console.log("👉 场景 1: 尝试读取沙箱外的系统文件 (触发物理安全拦截)");
-    await executeAsAgent("FileRead", { path: "/etc/passwd" });
-    console.log("\n------------------\n");
+    const testCtx: ToolContext = {
+        mode: 'default',
+        cwd: process.cwd(),
+        allowedPaths: [process.cwd()]
+    };
 
-    console.log("👉 场景 2: 尝试读取本项目内的文件 (触发规则检查/询问)");
-    await executeAsAgent("FileRead", { path: "src/types.ts" });
-    console.log("\n------------------\n");
+    console.log("1️⃣ 测试: 路径逃逸拦截 (.git 目录)");
+    await executeAsAgent("FileRead", { path: ".git/config" });
+    
+    console.log("\n2️⃣ 测试: 危险命令识别 (rm -rf)");
+    await executeAsAgent("Bash", { cmd: "rm -rf /" });
 
-    console.log("👉 场景 3: 执行命令 (询问是否允许)");
-    await executeAsAgent("Bash", { cmd: "ls -la" });
+    console.log("\n3️⃣ 测试: 写操作安全 (必须先读)");
+    await executeAsAgent("FileWrite", { path: "security_test.txt", content: "safe" });
+
+    console.log("\n4️⃣ 测试: 规则优先级 (Deny > Allow)");
+    await engine.saveRule({ tool: "FileRead", pattern: "secret", behavior: "allow", source: "user" });
+    await engine.saveRule({ tool: "FileRead", pattern: "secret", behavior: "deny", source: "user" });
+    await executeAsAgent("FileRead", { path: "secret_data.txt" });
+
+    console.log("\n5️⃣ 测试: MCP 权限 (mcp__google__*)");
+    await engine.saveRule({ tool: "mcp__google__*", behavior: "deny", source: "user" });
+    await executeAsAgent("mcp__google__search", { query: "hello" });
+
+    console.log("\n6️⃣ 测试: 只读模式 (ReadOnly mode)");
+    const readOnlyCtx = { ...testCtx, mode: 'readOnly' as const };
+    
+    console.log("- 读取 (应当允许，注入 allow 规则)");
+    await engine.saveRule({ tool: "FileRead", behavior: "allow", source: "user" });
+    let decision = await engine.decide("FileRead", JSON.stringify({path: "README.md"}), readOnlyCtx);
+    console.log(`Decision: ${decision.behavior} (${decision.reason})`);
+
+    console.log("- 写入 (应当拦截，即使有 allow 规则)");
+    await engine.saveRule({ tool: "FileWrite", behavior: "allow", source: "user" });
+    decision = await engine.decide("FileWrite", JSON.stringify({path: "README.md", content: "hack"}), readOnlyCtx);
+    console.log(`Decision: ${decision.behavior} (${decision.reason})`);
+
+    console.log("\n✅ 测试结束。请检查输出日志。");
+    process.exit(0);
 }
 
 runDemo();
