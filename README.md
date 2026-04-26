@@ -39,6 +39,8 @@ bun start
 ## 🛠 Architecture
 
 - **`src/engine.ts`**: The core decision-making brain. Handles rule matching (Deny > Ask > Allow) and persistence.
+- **`src/ruleMatcher.ts`**: Permission rule matching, including `Tool(pattern)` syntax such as `FileRead(src/**)`, `Bash(git status*)`, and `WebFetch(domain:example.com)`.
+- **`src/bashPermissions.ts`**: Conservative Bash command assessment for read-only detection and confirmation-required shell operations.
 - **`src/tools.ts`**: Pluggable tool definitions with built-in `checkPhysicalSafety` hooks.
 - **`src/index.ts`**: The execution orchestrator and interactive CLI handler.
 
@@ -48,7 +50,9 @@ bun start
 
 - **ReadOnly Mode**: Switch the global context to `readOnly` to automatically allow safe operations (like `ls` or `cat`) while still blocking destructive ones.
 - **Bypass Mode**: For internal/trusted environments, the permission layer can be fully bypassed.
-- **Pattern Matching**: Block specific dangerous command arguments using Regex patterns without disabling the entire tool.
+- **Tool Pattern Rules**: Allow or deny stable permission targets with `Tool(pattern)` rules while preserving legacy Regex patterns.
+- **WebFetch Domain Rules**: Grant network access by domain with rules like `WebFetch(domain:docs.example.com)`.
+- **Sensitive Path Protection**: Blocks common agent, shell, Git, SSH, editor, and package-manager configuration paths before policy rules are evaluated.
 
 ---
 

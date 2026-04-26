@@ -2,6 +2,8 @@ import { PermissionRule, PermissionDecision, ToolContext } from "./types"
 import { join, resolve, isAbsolute, normalize } from "path"
 import { statSync, existsSync, realpathSync, readFileSync } from "fs"
 import { createHash } from "crypto"
+import { isBashWriteOperation } from "./bashPermissions"
+import { ruleMatchesToolCall } from "./ruleMatcher"
 
 export interface AuditLog {
   toolName: string
@@ -131,11 +133,9 @@ export class PermissionEngine {
       return { behavior: "allow", reason: "Bypass mode" }
     }
 
-    const matchingRules = this.rules.filter(rule => {
-      if (!this.toolMatchesRule(rule.tool, toolName)) return false
-      if (rule.pattern && !this.patternMatches(rule.pattern, input)) return false
-      return true
-    })
+    const matchingRules = this.rules.filter(rule =>
+      ruleMatchesToolCall(rule, toolName, input, ctx),
+    )
 
     if (matchingRules.length > 0) {
       if (matchingRules.some(r => r.behavior === "deny")) {
@@ -172,47 +172,12 @@ export class PermissionEngine {
     return { behavior: "ask", reason: "No matching rule found" }
   }
 
-  private patternMatches(pattern: string, input: string): boolean {
-    try {
-      return new RegExp(pattern).test(input)
-    } catch {
-      return false
-    }
-  }
-
-  private toolMatchesRule(ruleTool: string, toolName: string): boolean {
-    if (ruleTool === "*") return true
-    if (ruleTool === toolName) return true
-    // MCP server-level rule:
-    // mcp__github__* matches mcp__github__search
-    if (ruleTool.endsWith("__*")) {
-      const prefix = ruleTool.slice(0, -1)
-      return toolName.startsWith(prefix)
-    }
-    return false
-  }
-
   private isWriteOperation(tool: string, input: string): boolean {
     if (["FileWrite", "FileEdit"].includes(tool)) return true
     if (tool === "Bash") {
       try {
         const parsed = JSON.parse(input)
-        const cmd = parsed.cmd || ""
-        const readOnlyPatterns = [
-          /^\s*ls\b/,
-          /^\s*pwd\b/,
-          /^\s*cat\b/,
-          /^\s*head\b/,
-          /^\s*tail\b/,
-          /^\s*grep\b/,
-          /^\s*rg\b/,
-          /^\s*find\b/,
-          /^\s*git\s+(status|diff|log|show|branch)\b/,
-        ]
-        if (readOnlyPatterns.some(p => p.test(cmd))) {
-          return false
-        }
-        return /\b(rm|mv|cp|chmod|chown|touch|mkdir|rmdir|tee)\b|>>|>|\bgit\s+(push|commit|reset|clean|rebase|merge|checkout)\b|\b(npm|yarn|bun|pnpm)\s+(install|add|remove|publish)\b/.test(cmd)
+        return isBashWriteOperation(parsed.cmd || "")
       } catch {
         return true
       }

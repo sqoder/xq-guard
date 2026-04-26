@@ -29,6 +29,163 @@ describe("xq-guard gateway", () => {
     expect(result.decision.behavior).toBe("deny")
   })
 
+  test("blocks broader agent and shell config sensitive paths", async () => {
+    const { gateway, engine } = setup()
+    await engine.saveRule({ tool: "FileRead", behavior: "allow", source: "user" })
+
+    for (const path of [
+      ".claude/settings.json",
+      ".vscode/settings.json",
+      ".idea/workspace.xml",
+      ".mcp.json",
+      ".claude.json",
+      ".profile",
+      ".zprofile",
+      ".bash_profile",
+      ".ripgreprc",
+    ]) {
+      const result = await gateway.execute("FileRead", { path })
+      expect(result.decision.behavior).toBe("deny")
+      expect(result.decision.reason).toContain("sensitive")
+    }
+  })
+
+  test("supports inline Tool(pattern) rules for file paths", async () => {
+    const { gateway, cwd, engine } = setup()
+    writeFileSync(join(cwd, "src-file.ts"), "ok")
+    writeFileSync(join(cwd, "other-file.ts"), "no")
+    await engine.saveRule({
+      tool: "FileRead(src-*)",
+      behavior: "allow",
+      source: "user",
+    })
+
+    const allowed = await gateway.execute("FileRead", { path: "src-file.ts" })
+    const rejected = await gateway.execute("FileRead", { path: "other-file.ts" })
+
+    expect(allowed.decision.behavior).toBe("allow")
+    expect(allowed.result?.ok).toBe(true)
+    expect(rejected.decision.behavior).toBe("deny")
+    expect(rejected.decision.reason).toBe("Auto-deny in non-interactive mode")
+  })
+
+  test("supports inline Bash(prefix*) permission rules", async () => {
+    const { cwd, engine } = setup()
+    const gateway = createGateway({
+      engine,
+      ctx: {
+        mode: "default",
+        cwd,
+        allowedPaths: [cwd],
+        interactive: false,
+      },
+      tools: {
+        Bash: {
+          name: "Bash",
+          validate: () => ({ ok: true }),
+          checkPhysicalSafety: async () => null,
+          run: async () => ({ ok: true, output: "stubbed bash" }),
+        } as any,
+      },
+    })
+    await engine.saveRule({
+      tool: "Bash(git status*)",
+      behavior: "allow",
+      source: "user",
+    })
+
+    const result = await gateway.execute("Bash", {
+      cmd: "git status --short",
+    })
+
+    expect(result.decision.behavior).toBe("allow")
+  })
+
+  test("supports Claude-style Bash(command:*) prefix rules", async () => {
+    const { cwd, engine } = setup()
+    const gateway = createGateway({
+      engine,
+      ctx: {
+        mode: "default",
+        cwd,
+        allowedPaths: [cwd],
+        interactive: false,
+      },
+      tools: {
+        Bash: {
+          name: "Bash",
+          validate: () => ({ ok: true }),
+          checkPhysicalSafety: async () => null,
+          run: async () => ({ ok: true, output: "stubbed bash" }),
+        } as any,
+      },
+    })
+    await engine.saveRule({
+      tool: "Bash(npm run:*)",
+      behavior: "allow",
+      source: "user",
+    })
+
+    const result = await gateway.execute("Bash", {
+      cmd: "npm run test:unit",
+    })
+
+    expect(result.decision.behavior).toBe("allow")
+  })
+
+  test("supports WebFetch domain permission rules", async () => {
+    const { cwd, engine } = setup()
+    const gateway = createGateway({
+      engine,
+      ctx: {
+        mode: "default",
+        cwd,
+        allowedPaths: [cwd],
+        interactive: false,
+      },
+      tools: {
+        WebFetch: {
+          name: "WebFetch",
+          validate: () => ({ ok: true }),
+          checkPhysicalSafety: async () => null,
+          run: async () => ({ ok: true, output: "stubbed fetch" }),
+        } as any,
+      },
+    })
+    await engine.saveRule({
+      tool: "WebFetch(domain:example.com)",
+      behavior: "allow",
+      source: "user",
+    })
+
+    const allowed = await gateway.execute("WebFetch", {
+      url: "https://docs.example.com/path",
+    })
+    const rejected = await gateway.execute("WebFetch", {
+      url: "https://example.org/path",
+    })
+
+    expect(allowed.decision.behavior).toBe("allow")
+    expect(rejected.decision.behavior).toBe("deny")
+    expect(rejected.decision.reason).toBe("Auto-deny in non-interactive mode")
+  })
+
+  test("registers WebFetch as a built-in tool with URL validation", async () => {
+    const { gateway, engine } = setup()
+    await engine.saveRule({
+      tool: "WebFetch",
+      behavior: "allow",
+      source: "user",
+    })
+
+    const result = await gateway.execute("WebFetch", {
+      url: "not a url",
+    })
+
+    expect(result.decision.behavior).toBe("deny")
+    expect(result.decision.reason).toContain("url must be a valid http(s) URL")
+  })
+
   test("allows creating new file when FileWrite is allowed", async () => {
     const { gateway, engine } = setup()
     await engine.saveRule({

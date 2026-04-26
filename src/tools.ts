@@ -9,6 +9,7 @@ import {
   normalize,
 } from "path"
 import { realpathSync, existsSync } from "fs"
+import { bashPhysicalSafetyDecision } from "./bashPermissions"
 
 function isObjectInput(input: unknown): input is Record<string, unknown> {
   return typeof input === "object" && input !== null && !Array.isArray(input)
@@ -85,14 +86,27 @@ export abstract class Tool {
       const lower = resolvedPath.toLowerCase()
       const segments = lower.split(/[\\/]+/)
       const fileName = segments.at(-1) || ""
-      const forbiddenDirs = [".git", ".ssh", "node_modules"]
+      const forbiddenDirs = [
+        ".claude",
+        ".git",
+        ".idea",
+        ".ssh",
+        ".vscode",
+        "node_modules",
+      ]
       const forbiddenFiles = [
         ".env",
+        ".bash_profile",
         ".bashrc",
-        ".zshrc",
-        ".npmrc",
+        ".claude.json",
         ".gitconfig",
         ".gitmodules",
+        ".mcp.json",
+        ".npmrc",
+        ".profile",
+        ".ripgreprc",
+        ".zprofile",
+        ".zshrc",
       ]
       if (segments.some(seg => forbiddenDirs.includes(seg))) {
         return {
@@ -169,32 +183,7 @@ export class BashTool extends Tool {
     input: { cmd: string },
     ctx: ToolContext,
   ): Promise<PermissionDecision | null> {
-    const cmd = input.cmd
-
-    // 识别危险操作
-    const dangerousPatterns = [
-      /\brm\b/,
-      /\bmv\b/,
-      /\bchmod\b/,
-      /\bchown\b/,
-      /\bcurl\b/,
-      /\bwget\b/,
-      /\bgit push\b/,
-      /\bnpm publish\b/,
-      />/, // 重定向
-      /\|/, // 管道
-      /&&/, // 复合命令
-      /;/ // 复合命令
-    ]
-
-    if (dangerousPatterns.some(p => p.test(cmd))) {
-      return {
-        behavior: "ask",
-        reason: `Command contains potentially dangerous operations or complexity: ${cmd}`,
-      }
-    }
-
-    return null
+    return bashPhysicalSafetyDecision(input.cmd)
   }
 
   async run(input: { cmd: string }, ctx: ToolContext): Promise<ToolRunResult> {
@@ -220,6 +209,47 @@ export class BashTool extends Tool {
       return { ok: true, output: output || "(No output)" };
     } catch (e: any) {
       return { ok: false, output: "", error: `Error running bash: ${e.message}` };
+    }
+  }
+}
+
+export class WebFetchTool extends Tool {
+  name = "WebFetch"
+  validate(input: any) {
+    if (!isObjectInput(input)) {
+      return { ok: false, msg: "Input must be an object" }
+    }
+    if (typeof input.url !== "string" || input.url.length === 0) {
+      return { ok: false, msg: "url must be a non-empty string" }
+    }
+    try {
+      const url = new URL(input.url)
+      if (url.protocol !== "http:" && url.protocol !== "https:") {
+        return { ok: false, msg: "url must be a valid http(s) URL" }
+      }
+    } catch {
+      return { ok: false, msg: "url must be a valid http(s) URL" }
+    }
+    return { ok: true }
+  }
+
+  async run(input: { url: string }): Promise<ToolRunResult> {
+    try {
+      const response = await fetch(input.url)
+      const text = await response.text()
+      const output = text.length > 1_000_000
+        ? `${text.slice(0, 1_000_000)}\n[truncated at 1000000 bytes]`
+        : text
+      if (!response.ok) {
+        return {
+          ok: false,
+          output,
+          error: `HTTP ${response.status} ${response.statusText}`,
+        }
+      }
+      return { ok: true, output }
+    } catch (e: any) {
+      return { ok: false, output: "", error: `Error fetching URL: ${e.message}` }
     }
   }
 }

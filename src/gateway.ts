@@ -1,5 +1,5 @@
 import { PermissionEngine } from "./engine";
-import { Tool, FileReadTool, BashTool, FileWriteTool, FileEditTool } from "./tools";
+import { Tool, FileReadTool, BashTool, FileWriteTool, FileEditTool, WebFetchTool } from "./tools";
 import { ToolContext, PermissionDecision, GatewayExecuteResult } from "./types";
 
 export interface GatewayOptions {
@@ -20,7 +20,8 @@ export class PermissionGateway {
       "FileRead": new FileReadTool(),
       "Bash": new BashTool(),
       "FileWrite": new FileWriteTool(),
-      "FileEdit": new FileEditTool()
+      "FileEdit": new FileEditTool(),
+      "WebFetch": new WebFetchTool()
     };
   }
 
