@@ -9,9 +9,18 @@ export interface PermissionRule {
   source: 'user' | 'project' | 'session';
 }
 
+export interface PermissionSuggestion {
+  id: string;
+  key: string;
+  label: string;
+  behavior: 'allow' | 'deny';
+  rule?: Omit<PermissionRule, 'id'>;
+}
+
 export interface PermissionDecision {
   behavior: 'allow' | 'deny' | 'ask';
   reason: string;
+  suggestions?: PermissionSuggestion[];
 }
 
 export interface ToolRunResult {

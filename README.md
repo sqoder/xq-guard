@@ -41,6 +41,7 @@ bun start
 - **`src/engine.ts`**: The core decision-making brain. Handles rule matching (Deny > Ask > Allow) and persistence.
 - **`src/ruleMatcher.ts`**: Permission rule matching, including `Tool(pattern)` syntax such as `FileRead(src/**)`, `Bash(git status*)`, and `WebFetch(domain:example.com)`.
 - **`src/bashPermissions.ts`**: Conservative Bash command assessment for read-only detection and confirmation-required shell operations.
+- **`src/permissionSuggestions.ts`**: Generates reusable permission choices for tool, path, command-prefix, domain, and MCP server scopes.
 - **`src/tools.ts`**: Pluggable tool definitions with built-in `checkPhysicalSafety` hooks.
 - **`src/index.ts`**: The execution orchestrator and interactive CLI handler.
 
@@ -53,6 +54,8 @@ bun start
 - **Tool Pattern Rules**: Allow or deny stable permission targets with `Tool(pattern)` rules while preserving legacy Regex patterns.
 - **WebFetch Domain Rules**: Grant network access by domain with rules like `WebFetch(domain:docs.example.com)`.
 - **Sensitive Path Protection**: Blocks common agent, shell, Git, SSH, editor, and package-manager configuration paths before policy rules are evaluated.
+- **Permission Suggestions**: Ask prompts can suggest one-time choices plus durable rules for exact file paths, Bash prefixes, WebFetch domains, and MCP servers.
+- **Bash Compound Handling**: Simple read-only compound commands such as `git status && pwd` can pass read-only classification, while mutating segments still require confirmation.
 
 ---
 

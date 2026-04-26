@@ -170,6 +170,22 @@ describe("xq-guard gateway", () => {
     expect(rejected.decision.reason).toBe("Auto-deny in non-interactive mode")
   })
 
+  test("returns permission suggestions when ask is auto-denied", async () => {
+    const { gateway } = setup()
+    const result = await gateway.execute("FileRead", {
+      path: "src/app.ts",
+    })
+
+    expect(result.decision.behavior).toBe("deny")
+    expect(result.decision.suggestions?.map(s => s.id)).toContain("allow_path")
+    expect(
+      result.decision.suggestions?.find(s => s.id === "allow_path")?.rule,
+    ).toMatchObject({
+      tool: "FileRead(src/app.ts)",
+      behavior: "allow",
+    })
+  })
+
   test("registers WebFetch as a built-in tool with URL validation", async () => {
     const { gateway, engine } = setup()
     await engine.saveRule({

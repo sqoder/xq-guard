@@ -8,6 +8,7 @@ export interface BashPermissionAssessment {
 
 const READ_ONLY_COMMANDS = new Set([
   "cat",
+  "echo",
   "find",
   "grep",
   "head",
@@ -83,36 +84,85 @@ const MUTATING_PACKAGE_SUBCOMMANDS = new Set([
 
 const PACKAGE_MANAGERS = new Set(["bun", "npm", "pnpm", "yarn"])
 
-function hasUnquotedShellOperator(cmd: string): boolean {
+function splitCompoundCommands(cmd: string): {
+  segments: string[]
+  unsafeReason?: string
+} {
+  const segments: string[] = []
   let quote: "'" | '"' | null = null
   let escaped = false
+  let current = ""
+
   for (let i = 0; i < cmd.length; i += 1) {
     const char = cmd[i]
     const next = cmd[i + 1]
     if (escaped) {
+      current += char
       escaped = false
       continue
     }
     if (char === "\\") {
+      current += char
       escaped = true
       continue
     }
     if (quote) {
+      current += char
       if (char === quote) quote = null
       continue
     }
     if (char === "'" || char === '"') {
+      current += char
       quote = char
       continue
     }
-    if (char === "`") return true
-    if (char === "$" && next === "(") return true
-    if (char === ";" || char === "|" || char === "<" || char === ">") {
-      return true
+    if (char === "`" || (char === "$" && next === "(")) {
+      return {
+        segments: [],
+        unsafeReason: `Command contains shell substitution: ${cmd}`,
+      }
     }
-    if (char === "&" && next === "&") return true
+    if (char === "|" || char === "<" || char === ">") {
+      return {
+        segments: [],
+        unsafeReason: `Command contains shell operators: ${cmd}`,
+      }
+    }
+    if (char === "&" && next === "&") {
+      if (current.trim().length === 0) {
+        return { segments: [], unsafeReason: `Empty command segment: ${cmd}` }
+      }
+      segments.push(current.trim())
+      current = ""
+      i += 1
+      continue
+    }
+    if (char === "&") {
+      return {
+        segments: [],
+        unsafeReason: `Command contains background operator: ${cmd}`,
+      }
+    }
+    if (char === ";") {
+      if (current.trim().length === 0) {
+        return { segments: [], unsafeReason: `Empty command segment: ${cmd}` }
+      }
+      segments.push(current.trim())
+      current = ""
+      continue
+    }
+    current += char
   }
-  return false
+
+  if (quote) {
+    return { segments: [], unsafeReason: `Command has unterminated quote: ${cmd}` }
+  }
+
+  if (current.trim().length > 0) {
+    segments.push(current.trim())
+  }
+
+  return { segments }
 }
 
 function tokenizeShellWords(cmd: string): string[] {
@@ -197,21 +247,13 @@ function packageSubcommand(words: string[]): string | undefined {
   return words[1]
 }
 
-export function assessBashCommand(cmd: string): BashPermissionAssessment {
+function assessSimpleBashCommand(cmd: string): BashPermissionAssessment {
   const trimmed = cmd.trim()
   if (trimmed.length === 0) {
     return {
       isReadOnly: false,
       requiresAsk: true,
       reason: "Empty shell command",
-    }
-  }
-
-  if (hasUnquotedShellOperator(trimmed)) {
-    return {
-      isReadOnly: false,
-      requiresAsk: true,
-      reason: `Command contains shell operators or substitutions: ${cmd}`,
     }
   }
 
@@ -267,6 +309,38 @@ export function assessBashCommand(cmd: string): BashPermissionAssessment {
   }
 
   return { isReadOnly: false, requiresAsk: false }
+}
+
+export function assessBashCommand(cmd: string): BashPermissionAssessment {
+  const trimmed = cmd.trim()
+  if (trimmed.length === 0) {
+    return {
+      isReadOnly: false,
+      requiresAsk: true,
+      reason: "Empty shell command",
+    }
+  }
+
+  const split = splitCompoundCommands(trimmed)
+  if (split.unsafeReason) {
+    return {
+      isReadOnly: false,
+      requiresAsk: true,
+      reason: split.unsafeReason,
+    }
+  }
+
+  if (split.segments.length > 1) {
+    const assessments = split.segments.map(assessSimpleBashCommand)
+    const unsafe = assessments.find(assessment => assessment.requiresAsk)
+    if (unsafe) return unsafe
+    return {
+      isReadOnly: assessments.every(assessment => assessment.isReadOnly),
+      requiresAsk: false,
+    }
+  }
+
+  return assessSimpleBashCommand(trimmed)
 }
 
 export function bashPhysicalSafetyDecision(cmd: string): PermissionDecision | null {

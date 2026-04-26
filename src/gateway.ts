@@ -1,6 +1,7 @@
 import { PermissionEngine } from "./engine";
 import { Tool, FileReadTool, BashTool, FileWriteTool, FileEditTool, WebFetchTool } from "./tools";
 import { ToolContext, PermissionDecision, GatewayExecuteResult } from "./types";
+import { buildPermissionSuggestions } from "./permissionSuggestions";
 
 export interface GatewayOptions {
   engine: PermissionEngine;
@@ -141,44 +142,47 @@ export class PermissionGateway {
     input: any,
     decision: { behavior: "ask"; reason: string },
   ): Promise<PermissionDecision> {
+    const suggestions = buildPermissionSuggestions(toolName, input);
     if (!this.ctx.interactive) {
       return {
         behavior: "deny" as const,
         reason: "Auto-deny in non-interactive mode",
+        suggestions,
       };
     }
 
     console.log(`\nAgent wants to execute [${toolName}]`);
     console.log(`Input: ${JSON.stringify(input)}`);
     console.log(`Reason: ${decision.reason}`);
-    process.stdout.write(
-      "\nAllow?\n(y) allow once\n(n) deny\n(a) always allow tool\n(d) always deny this input\n> ",
-    );
+    const prompt = suggestions
+      .map(suggestion => `(${suggestion.key}) ${suggestion.label}`)
+      .join("\n");
+    process.stdout.write(`\nAllow?\n${prompt}\n> `);
 
     return new Promise<PermissionDecision>((resolve) => {
       process.stdin.once('data', async (data) => {
         const answer = data.toString().trim().toLowerCase();
-        if (answer === "y") {
-          resolve({ behavior: "allow" as const, reason: "User approved once" });
-        } else if (answer === "a") {
-          await this.engine.saveRule({
-            tool: toolName,
-            behavior: "allow",
-            source: "user",
+        const suggestion = suggestions.find(candidate => candidate.key === answer);
+        if (!suggestion) {
+          resolve({
+            behavior: "deny" as const,
+            reason: "User rejected",
+            suggestions,
           });
-          resolve({ behavior: "allow" as const, reason: "User saved allow rule" });
-        } else if (answer === "d") {
-          const pattern = input.path || input.cmd || JSON.stringify(input);
-          await this.engine.saveRule({
-            tool: toolName,
-            pattern,
-            behavior: "deny",
-            source: "user",
-          });
-          resolve({ behavior: "deny" as const, reason: "User saved deny rule" });
-        } else {
-          resolve({ behavior: "deny" as const, reason: "User rejected" });
+          return;
         }
+        if (suggestion.rule) {
+          await this.engine.saveRule(suggestion.rule);
+        }
+        resolve({
+          behavior: suggestion.behavior,
+          reason: suggestion.rule
+            ? `User saved ${suggestion.behavior} rule`
+            : suggestion.behavior === "allow"
+              ? "User approved once"
+              : "User rejected",
+          suggestions,
+        });
       });
     });
   }
